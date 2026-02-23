@@ -1,6 +1,8 @@
 "use client";
 
-import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
+// FileUIPart and SourceDocumentUIPart are complex types coupled to the ai package
+import type { FileUIPart, SourceDocumentUIPart } from "ai";
+import type { ChatStatus } from "@/lib/hooks/use-agent-chat";
 import type {
   ChangeEvent,
   ChangeEventHandler,
@@ -674,7 +676,6 @@ export const PromptInput = ({
         }
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- cleanup only on unmount; filesRef always current
     [usingProvider]
   );
 
@@ -740,7 +741,8 @@ export const PromptInput = ({
       try {
         // Convert blob URLs to data URLs asynchronously
         const convertedFiles: FileUIPart[] = await Promise.all(
-          files.map(async ({ id: _id, ...item }) => {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructuring out id to exclude from FileUIPart
+          files.map(async ({ id, ...item }) => {
             if (item.url?.startsWith("blob:")) {
               const dataUrl = await convertBlobUrlToDataUrl(item.url);
               // If conversion failed, keep the original blob URL
@@ -956,7 +958,7 @@ export const PromptInputHeader = ({
   ...props
 }: PromptInputHeaderProps) => (
   <InputGroupAddon
-    align="block-end"
+    align="block-start"
     className={cn("order-first flex-wrap gap-1", className)}
     {...props}
   />

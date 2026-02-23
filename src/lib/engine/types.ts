@@ -67,5 +67,6 @@ export type LoopEvent =
   | { type: "text"; content: string }
   | { type: "tool_call"; call: ToolCall }
   | { type: "tool_result"; callId: string; result: string }
+  | { type: "conversation"; conversationId: string }
   | { type: "error"; message: string }
   | { type: "done" };

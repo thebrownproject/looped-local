@@ -71,4 +71,27 @@ describe("writeFileTool", () => {
     const result = await tool.execute(JSON.stringify({ path: "/tmp/file.txt" }));
     expect(result).toContain("content");
   });
+
+  it("returns error when content is a number instead of string", async () => {
+    const result = await tool.execute(JSON.stringify({ path: "/tmp/file.txt", content: 123 }));
+    expect(result).toContain("content");
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("returns error when content is a boolean instead of string", async () => {
+    const result = await tool.execute(JSON.stringify({ path: "/tmp/file.txt", content: true }));
+    expect(result).toContain("content");
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("returns error when content is an object instead of string", async () => {
+    const result = await tool.execute(JSON.stringify({ path: "/tmp/file.txt", content: { key: "val" } }));
+    expect(result).toContain("content");
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("returns error on invalid JSON input", async () => {
+    const result = await tool.execute("not valid json");
+    expect(result).toContain("invalid JSON");
+  });
 });

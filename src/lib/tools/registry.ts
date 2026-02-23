@@ -5,6 +5,9 @@ export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>();
 
   register(tool: ToolDefinition): void {
+    if (this.tools.has(tool.definition.name)) {
+      console.warn(`ToolRegistry: overwriting existing tool "${tool.definition.name}"`);
+    }
     this.tools.set(tool.definition.name, tool);
   }
 

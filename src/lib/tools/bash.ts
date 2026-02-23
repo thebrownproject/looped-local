@@ -36,12 +36,12 @@ export function createBashTool(exec: ExecFn = nodeExec): ToolDefinition {
         return "Error: missing required argument: cmd";
       }
 
-      const timeout = parsed.timeout ?? DEFAULT_TIMEOUT_MS;
+      const timeout = Math.max(1000, Math.min(Number(parsed.timeout) || DEFAULT_TIMEOUT_MS, 60_000));
 
       return new Promise((resolve) => {
         exec(parsed.cmd as string, { timeout }, (err, stdout, stderr) => {
           if (err) {
-            resolve(stderr || err.message);
+            resolve(stderr ? (stdout ? stdout + "\n" + stderr : stderr) : (stdout || err.message));
             return;
           }
           resolve(stdout);

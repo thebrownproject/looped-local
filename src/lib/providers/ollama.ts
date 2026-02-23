@@ -21,6 +21,14 @@ interface OllamaResponse {
   message: OllamaMessage;
 }
 
+function safeParseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
 export class OllamaProvider implements Provider {
   private baseUrl: string;
   private defaultModel: string;
@@ -32,7 +40,7 @@ export class OllamaProvider implements Provider {
 
   async chat(messages: Message[], tools: ToolDefinitionForLLM[], model: string): Promise<LLMResponse> {
     const body = {
-      model: model || this.defaultModel,
+      model: model ?? this.defaultModel,
       messages: this.serializeMessages(messages),
       tools: tools.map((t) => ({
         type: "function",
@@ -53,10 +61,16 @@ export class OllamaProvider implements Provider {
     }
 
     if (!res.ok) {
-      throw new Error(`Ollama request failed: ${res.status}`);
+      const body = await res.text().catch(() => "");
+      throw new Error(`Ollama request failed: ${res.status} - ${body}`);
     }
 
-    const data: OllamaResponse = await res.json();
+    let data: OllamaResponse;
+    try {
+      data = await res.json();
+    } catch {
+      throw new Error("Ollama returned invalid JSON");
+    }
     return this.parseResponse(data);
   }
 
@@ -76,7 +90,7 @@ export class OllamaProvider implements Provider {
       return { type: "tool_calls", calls };
     }
 
-    return { type: "text", content };
+    return { type: "text", content: content ?? "" };
   }
 
   // Serialize engine Message[] to Ollama wire format.
@@ -94,7 +108,7 @@ export class OllamaProvider implements Provider {
           role: "assistant",
           content: msg.content ?? "",
           tool_calls: msg.toolCalls.map((tc) => ({
-            function: { name: tc.name, arguments: JSON.parse(tc.arguments) },
+            function: { name: tc.name, arguments: safeParseJson(tc.arguments) },
           })),
         };
       }

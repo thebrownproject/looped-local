@@ -1,5 +1,4 @@
 import { eq, asc, desc } from "drizzle-orm";
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 import { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { conversations, messages } from "./schema";
 import type { ToolCall, MessageRole } from "@/lib/engine/types";
@@ -19,6 +18,10 @@ export function createConversation(db: Db, title: string) {
 
 export function listConversations(db: Db) {
   return db.select().from(conversations).orderBy(desc(conversations.createdAt)).all();
+}
+
+export function getConversation(db: Db, id: string) {
+  return db.select().from(conversations).where(eq(conversations.id, id)).get() ?? null;
 }
 
 export function getConversationWithMessages(db: Db, id: string) {
@@ -51,7 +54,8 @@ export interface SaveMessageInput {
 
 export function saveMessage(db: Db, input: SaveMessageInput) {
   const id = crypto.randomUUID();
-  return db
+  // Date.now() can collide within the same ms; ordering relies on insert sequence
+  const row = db
     .insert(messages)
     .values({
       id,
@@ -64,16 +68,30 @@ export function saveMessage(db: Db, input: SaveMessageInput) {
     })
     .returning()
     .get();
+
+  return {
+    ...row,
+    toolCalls: row.toolCalls
+      ? (JSON.parse(row.toolCalls) as ToolCall[])
+      : null,
+  };
 }
 
 export function updateConversationTitle(db: Db, id: string, title: string) {
-  db.update(conversations)
+  const result = db
+    .update(conversations)
     .set({ title, updatedAt: Date.now() })
     .where(eq(conversations.id, id))
     .run();
+  return result.changes;
 }
 
-export function deleteConversation(db: Db, id: string) {
-  db.delete(messages).where(eq(messages.conversationId, id)).run();
-  db.delete(conversations).where(eq(conversations.id, id)).run();
+export function deleteConversation(db: Db, id: string): boolean {
+  let deleted = false;
+  db.transaction((tx) => {
+    tx.delete(messages).where(eq(messages.conversationId, id)).run();
+    const result = tx.delete(conversations).where(eq(conversations.id, id)).run();
+    deleted = result.changes > 0;
+  });
+  return deleted;
 }

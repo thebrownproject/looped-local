@@ -53,4 +53,9 @@ describe("readFileTool", () => {
     const result = await tool.execute(JSON.stringify({}));
     expect(result).toContain("path");
   });
+
+  it("returns error on invalid JSON input", async () => {
+    const result = await tool.execute("{broken json");
+    expect(result).toContain("invalid JSON");
+  });
 });

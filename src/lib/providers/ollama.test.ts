@@ -17,6 +17,7 @@ function mockFetch(body: unknown, status = 200) {
     ok: status >= 200 && status < 300,
     status,
     json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
   });
 }
 
@@ -126,6 +127,7 @@ describe("OllamaProvider", () => {
     );
 
     const result = await provider.chat([], tools, MODEL);
+    expect(result.type).toBe("tool_calls");
     if (result.type === "tool_calls") {
       expect(result.calls[0].id).toBeTruthy();
       expect(typeof result.calls[0].id).toBe("string");
@@ -145,6 +147,7 @@ describe("OllamaProvider", () => {
     );
 
     const result = await provider.chat([], tools, MODEL);
+    expect(result.type).toBe("tool_calls");
     if (result.type === "tool_calls") {
       expect(result.calls[0].arguments).toBe('{"cmd":"pwd"}');
     }
@@ -192,7 +195,9 @@ describe("OllamaProvider", () => {
   it("throws on non-200 responses with descriptive message", async () => {
     vi.stubGlobal("fetch", mockFetch({ error: "model not found" }, 404));
 
-    await expect(provider.chat([], [], MODEL)).rejects.toThrow("Ollama request failed: 404");
+    await expect(provider.chat([], [], MODEL)).rejects.toThrow(
+      'Ollama request failed: 404 - {"error":"model not found"}'
+    );
   });
 
   it("throws on network errors with descriptive message", async () => {

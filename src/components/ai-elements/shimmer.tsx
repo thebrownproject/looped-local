@@ -32,6 +32,7 @@ export interface TextShimmerProps {
   spread?: number;
 }
 
+/* eslint-disable react-hooks/static-components -- MotionComponent is module-level cached, reference is stable per element type */
 const ShimmerComponent = ({
   children,
   as: Component = "p",
@@ -39,8 +40,9 @@ const ShimmerComponent = ({
   duration = 2,
   spread = 2,
 }: TextShimmerProps) => {
-  const MotionComponent = getMotionComponent(
-    Component as keyof JSX.IntrinsicElements
+  const MotionComponent = useMemo(
+    () => getMotionComponent(Component as keyof JSX.IntrinsicElements),
+    [Component]
   );
 
   const dynamicSpread = useMemo(
@@ -74,5 +76,6 @@ const ShimmerComponent = ({
     </MotionComponent>
   );
 };
+/* eslint-enable react-hooks/static-components */
 
 export const Shimmer = memo(ShimmerComponent);

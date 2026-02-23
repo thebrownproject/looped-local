@@ -131,10 +131,11 @@ describe("engine type shapes", () => {
         call: { id: "1", name: "bash", arguments: "{}" },
       },
       { type: "tool_result", callId: "1", result: "output" },
+      { type: "conversation", conversationId: "conv-123" },
       { type: "error", message: "something went wrong" },
       { type: "done" },
     ];
-    expect(events).toHaveLength(5);
+    expect(events).toHaveLength(6);
   });
 
   it("LoopConfig has required fields", () => {

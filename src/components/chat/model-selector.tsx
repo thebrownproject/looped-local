@@ -20,15 +20,17 @@ export function ModelSelector({ value, onChange }: Props) {
   const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
 
   useEffect(() => {
-    fetch("http://localhost:11434/api/tags")
+    const controller = new AbortController();
+    fetch("http://localhost:11434/api/tags", { signal: controller.signal })
       .then((r) => r.json())
       .then((data) => {
         const names = (data.models as { name: string }[])?.map((m) => m.name);
         if (names?.length) setModels(names);
       })
       .catch(() => {
-        // Ollama not running - keep fallback list
+        // Ollama not running or request aborted - keep fallback list
       });
+    return () => controller.abort();
   }, []);
 
   return (

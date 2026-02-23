@@ -66,4 +66,26 @@ describe("ToolRegistry", () => {
       'Tool "unknown" not found in registry'
     );
   });
+
+  // -- Duplicate registration --
+
+  it("warns on duplicate tool registration", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    registry.register(makeTool("bash"));
+    registry.register(makeTool("bash"));
+    expect(warnSpy).toHaveBeenCalledWith(
+      'ToolRegistry: overwriting existing tool "bash"'
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("overwrites tool on duplicate registration", () => {
+    const tool1 = makeTool("bash");
+    const tool2 = makeTool("bash");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    registry.register(tool1);
+    registry.register(tool2);
+    expect(registry.get("bash")).toBe(tool2);
+    vi.restoreAllMocks();
+  });
 });

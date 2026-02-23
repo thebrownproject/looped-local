@@ -32,10 +32,9 @@ import { createHighlighter } from "shiki";
 
 // Shiki uses bitflags for font styles: 1=italic, 2=bold, 4=underline
 // biome-ignore lint/suspicious/noBitwiseOperators: shiki bitflag check
-// eslint-disable-next-line no-bitwise -- shiki bitflag check
+// oxlint-disable-next-line eslint(no-bitwise)
 const isItalic = (fontStyle: number | undefined) => fontStyle && fontStyle & 1;
 // biome-ignore lint/suspicious/noBitwiseOperators: shiki bitflag check
-// eslint-disable-next-line no-bitwise -- shiki bitflag check
 // oxlint-disable-next-line eslint(no-bitwise)
 const isBold = (fontStyle: number | undefined) => fontStyle && fontStyle & 2;
 const isUnderline = (fontStyle: number | undefined) =>
@@ -120,6 +119,14 @@ const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
 });
 
+const MAX_CACHE_SIZE = 100;
+
+function evictOldest<V>(map: Map<string, V>) {
+  if (map.size <= MAX_CACHE_SIZE) return;
+  const first = map.keys().next();
+  if (!first.done) map.delete(first.value);
+}
+
 // Highlighter cache (singleton per language)
 const highlighterCache = new Map<
   string,
@@ -132,10 +139,24 @@ const tokensCache = new Map<string, TokenizedCode>();
 // Subscribers for async token updates
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
 
+// Simple hash to disambiguate cache keys with identical prefix/suffix/length
+function simpleHash(str: string): number {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    // biome-ignore lint/suspicious/noBitwiseOperators: intentional hash computation
+    // oxlint-disable-next-line eslint(no-bitwise)
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  // biome-ignore lint/suspicious/noBitwiseOperators: intentional unsigned shift
+  // oxlint-disable-next-line eslint(no-bitwise)
+  return h >>> 0;
+}
+
 const getTokensCacheKey = (code: string, language: BundledLanguage) => {
+  if (code.length <= 200) return `${language}:${code}`;
   const start = code.slice(0, 100);
-  const end = code.length > 100 ? code.slice(-100) : "";
-  return `${language}:${code.length}:${start}:${end}`;
+  const end = code.slice(-100);
+  return `${language}:${code.length}:${simpleHash(code)}:${start}:${end}`;
 };
 
 const getHighlighter = (
@@ -151,6 +172,7 @@ const getHighlighter = (
     themes: ["github-light", "github-dark"],
   });
 
+  evictOldest(highlighterCache);
   highlighterCache.set(language, highlighterPromise);
   return highlighterPromise;
 };
@@ -215,7 +237,7 @@ export const highlightCode = (
         tokens: result.tokens,
       };
 
-      // Cache the result
+      evictOldest(tokensCache);
       tokensCache.set(tokensCacheKey, tokenized);
 
       // Notify all subscribers
@@ -396,8 +418,12 @@ export const CodeBlockContent = ({
   useEffect(() => {
     let cancelled = false;
 
-    // Reset to raw tokens when code changes (shows current code, not stale tokens)
-    setTokenized(highlightCode(code, language) ?? rawTokens);
+    // Reset to raw/cached tokens when deps change, deferred to avoid synchronous setState in effect
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setTokenized(highlightCode(code, language) ?? rawTokens);
+      }
+    });
 
     // Subscribe to async highlighting result
     highlightCode(code, language, (result) => {

@@ -10,6 +10,12 @@ export interface LoopInput {
 }
 
 export async function* runLoop({ provider, registry, config, messages }: LoopInput): AsyncGenerator<LoopEvent> {
+  if (config.maxIterations <= 0) {
+    yield { type: "error", message: "Invalid maxIterations" };
+    yield { type: "done" };
+    return;
+  }
+
   // Spread to avoid mutating the caller's array
   const ctx: Message[] = config.systemPrompt
     ? [{ role: "system", content: config.systemPrompt }, ...messages]
@@ -17,42 +23,53 @@ export async function* runLoop({ provider, registry, config, messages }: LoopInp
 
   const tools = registry.toToolDefinitions();
 
-  for (let iteration = 0; iteration < config.maxIterations; iteration++) {
-    let response;
-    try {
-      response = await provider.chat(ctx, tools, config.model);
-    } catch (err) {
-      yield { type: "error", message: err instanceof Error ? err.message : String(err) };
-      yield { type: "done" };
-      return;
+  try {
+    for (let iteration = 0; iteration < config.maxIterations; iteration++) {
+      let response;
+      try {
+        response = await provider.chat(ctx, tools, config.model);
+      } catch (err) {
+        yield { type: "error", message: err instanceof Error ? err.message : String(err) };
+        yield { type: "done" };
+        return;
+      }
+
+      if (response.type === "text") {
+        yield { type: "text", content: response.content };
+        yield { type: "done" };
+        return;
+      }
+
+      // Guard against empty tool_calls corrupting context
+      if (response.calls.length === 0) {
+        yield { type: "error", message: "Provider returned empty tool_calls" };
+        yield { type: "done" };
+        return;
+      }
+
+      // Process tool calls batch
+      const assistantMsg: Message = {
+        role: "assistant",
+        content: null,
+        toolCalls: response.calls,
+      };
+      ctx.push(assistantMsg);
+
+      for (const call of response.calls) {
+        yield { type: "tool_call", call };
+
+        const result = await executeToolSafe(registry, call);
+        yield { type: "tool_result", callId: call.id, result };
+
+        ctx.push({ role: "tool", content: result, toolCallId: call.id });
+      }
     }
 
-    if (response.type === "text") {
-      yield { type: "text", content: response.content };
-      yield { type: "done" };
-      return;
-    }
-
-    // Process tool calls batch
-    const assistantMsg: Message = {
-      role: "assistant",
-      content: null,
-      toolCalls: response.calls,
-    };
-    ctx.push(assistantMsg);
-
-    for (const call of response.calls) {
-      yield { type: "tool_call", call };
-
-      const result = await executeToolSafe(registry, call);
-      yield { type: "tool_result", callId: call.id, result };
-
-      ctx.push({ role: "tool", content: result, toolCallId: call.id });
-    }
+    yield { type: "error", message: "Max iterations reached" };
+    yield { type: "done" };
+  } finally {
+    // Generator cleanup: release resources when consumer stops iterating early
   }
-
-  yield { type: "error", message: "Max iterations reached" };
-  yield { type: "done" };
 }
 
 async function executeToolSafe(registry: ToolRegistry, call: ToolCall): Promise<string> {

@@ -1,18 +1,20 @@
 // @vitest-environment node
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import * as schema from "./schema";
 import {
   createConversation,
   listConversations,
   getConversationWithMessages,
   saveMessage,
   updateConversationTitle,
+  deleteConversation,
 } from "./queries";
 
-// Bootstrap an in-memory db with the schema applied directly (no migration files needed)
 function createTestDb() {
   const sqlite = new Database(":memory:");
+  // WAL pragma is a no-op for :memory: but kept for parity with production
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
 
@@ -25,16 +27,17 @@ function createTestDb() {
     );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY NOT NULL,
-      conversation_id TEXT NOT NULL REFERENCES conversations(id),
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       role TEXT NOT NULL,
       content TEXT,
       tool_calls TEXT,
       tool_call_id TEXT,
       created_at INTEGER NOT NULL
     );
+    CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
   `);
 
-  return drizzle(sqlite);
+  return drizzle(sqlite, { schema });
 }
 
 type TestDb = ReturnType<typeof createTestDb>;
@@ -145,6 +148,75 @@ describe("tool_calls JSON serialization", () => {
     });
     const { messages } = getConversationWithMessages(db, convId)!;
     expect(messages[0].toolCallId).toBe("call_1");
+  });
+});
+
+describe("saveMessage return value", () => {
+  let db: TestDb;
+  let convId: string;
+
+  beforeEach(() => {
+    db = createTestDb();
+    convId = createConversation(db, "Return val conv").id;
+  });
+
+  it("returns parsed toolCalls instead of raw JSON string", () => {
+    const toolCalls = [{ id: "call_1", name: "bash", arguments: '{"cmd":"ls"}' }];
+    const saved = saveMessage(db, {
+      conversationId: convId,
+      role: "assistant",
+      content: null,
+      toolCalls,
+    });
+    expect(saved.toolCalls).toEqual(toolCalls);
+    expect(typeof saved.toolCalls).not.toBe("string");
+  });
+
+  it("returns null toolCalls when none provided", () => {
+    const saved = saveMessage(db, {
+      conversationId: convId,
+      role: "user",
+      content: "hi",
+    });
+    expect(saved.toolCalls).toBeNull();
+  });
+});
+
+describe("deleteConversation", () => {
+  let db: TestDb;
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+
+  it("deletes an empty conversation", () => {
+    const conv = createConversation(db, "To delete");
+    const result = deleteConversation(db, conv.id);
+    expect(result).toBe(true);
+    expect(getConversationWithMessages(db, conv.id)).toBeNull();
+  });
+
+  it("cascades to messages when conversation is deleted", () => {
+    const conv = createConversation(db, "With messages");
+    saveMessage(db, { conversationId: conv.id, role: "user", content: "hello" });
+    saveMessage(db, { conversationId: conv.id, role: "assistant", content: "hi" });
+
+    const result = deleteConversation(db, conv.id);
+    expect(result).toBe(true);
+    expect(getConversationWithMessages(db, conv.id)).toBeNull();
+  });
+
+  it("returns false for non-existent conversation id", () => {
+    const result = deleteConversation(db, "does-not-exist");
+    expect(result).toBe(false);
+  });
+});
+
+describe("updateConversationTitle", () => {
+  it("returns 0 changes for non-existent id", () => {
+    const db = createTestDb();
+    const changes = updateConversationTitle(db, "ghost-id", "New");
+    expect(changes).toBe(0);
   });
 });
 

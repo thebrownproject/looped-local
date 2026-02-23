@@ -17,6 +17,8 @@ export function loopToSSEStream(
       try {
         const { value, done } = await gen.next();
         if (done) {
+          // Bug 9: generator exhausted without yielding "done" -- send synthetic one
+          controller.enqueue(encodeFrame({ type: "done" }));
           controller.close();
           return;
         }
@@ -26,9 +28,13 @@ export function loopToSSEStream(
         const msg = err instanceof Error ? err.message : String(err);
         controller.enqueue(encodeFrame({ type: "error", message: msg }));
         controller.close();
+        // Bug 2: release generator resources on error
+        gen.return(undefined as never);
       }
     },
     cancel() {
+      // Bug 1: release generator resources on client disconnect
+      gen.return(undefined as never);
       onCancel?.();
     },
   });

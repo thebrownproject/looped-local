@@ -2,9 +2,9 @@ import { NextRequest } from "next/server";
 import { OllamaProvider } from "@/lib/providers";
 import { createDefaultRegistry } from "@/lib/tools";
 import { runLoop } from "@/lib/engine";
-import type { Message } from "@/lib/engine";
+import type { Message, MessageRole } from "@/lib/engine";
 import { loopToSSEStream } from "@/lib/engine/adapters";
-import { getDb, createConversation, saveMessage } from "@/lib/db";
+import { getDb, createConversation, getConversation, saveMessage } from "@/lib/db";
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -12,55 +12,113 @@ const SSE_HEADERS = {
   Connection: "keep-alive",
 };
 
+const VALID_ROLES = new Set<MessageRole>(["system", "user", "assistant", "tool"]);
+
+function isValidMessage(m: unknown): m is Message {
+  if (typeof m !== "object" || m === null) return false;
+  const obj = m as Record<string, unknown>;
+  return (
+    typeof obj.role === "string" &&
+    VALID_ROLES.has(obj.role as MessageRole) &&
+    (typeof obj.content === "string" || obj.content === null || obj.content === undefined)
+  );
+}
+
 export async function POST(req: NextRequest) {
-  let body: { messages?: Message[]; conversationId?: string; model?: string };
+  let body: { messages?: unknown[]; conversationId?: string; model?: string };
   try {
     body = await req.json();
   } catch {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { messages, conversationId, model = "qwen2.5-coder" } = body;
+  const { messages: rawMessages, conversationId, model = "qwen2.5-coder" } = body;
 
-  if (!messages || !Array.isArray(messages) || messages.length === 0) {
+  if (!rawMessages || !Array.isArray(rawMessages) || rawMessages.length === 0) {
     return Response.json({ error: "messages is required" }, { status: 400 });
   }
 
+  // Bug 5: validate each message has correct shape
+  if (!rawMessages.every(isValidMessage)) {
+    return Response.json(
+      { error: "Each message must have a valid role and content (string or null)" },
+      { status: 400 },
+    );
+  }
+
+  const messages: Message[] = rawMessages;
   const db = getDb();
 
-  // Resolve or create conversation
-  const convId =
-    conversationId ??
-    createConversation(db, messages[0].content?.slice(0, 60) ?? "New chat").id;
+  // Bug 3: validate conversationId exists if provided
+  if (conversationId && !getConversation(db, conversationId)) {
+    return Response.json({ error: "Conversation not found" }, { status: 400 });
+  }
 
-  // Persist user message (last message in array)
-  const userMessage = messages[messages.length - 1];
-  saveMessage(db, {
-    conversationId: convId,
-    role: userMessage.role,
-    content: userMessage.content,
-    toolCalls: userMessage.toolCalls,
-    toolCallId: userMessage.toolCallId,
-  });
+  // Bug 8: find last user message instead of assuming last element
+  const userMessage = [...messages].reverse().find((m) => m.role === "user");
+
+  // Bug 11: empty string title not caught by `??` -- use `||`
+  const convId =
+    conversationId ||
+    createConversation(db, messages[0].content?.slice(0, 60) || "New chat").id;
+
+  // Bug 6: wrap saveMessage in try/catch
+  if (userMessage) {
+    try {
+      saveMessage(db, {
+        conversationId: convId,
+        role: userMessage.role,
+        content: userMessage.content,
+        toolCalls: userMessage.toolCalls,
+        toolCallId: userMessage.toolCallId,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return Response.json({ error: `Failed to save message: ${msg}` }, { status: 500 });
+    }
+  }
 
   const provider = new OllamaProvider({ model });
   const registry = createDefaultRegistry();
 
-  // Buffer text events to build the full assistant message after loop
   let assistantContent = "";
-  const validatedMessages: Message[] = messages;
 
   async function* tracked(): AsyncGenerator<import("@/lib/engine").LoopEvent> {
-    const gen = runLoop({ provider, registry, config: { model, maxIterations: 20 }, messages: validatedMessages });
+    yield { type: "conversation", conversationId: convId };
+    const gen = runLoop({ provider, registry, config: { model, maxIterations: 20 }, messages });
     for await (const event of gen) {
       if (event.type === "text") assistantContent += event.content;
-      if (event.type === "done") {
-        saveMessage(db, { conversationId: convId, role: "assistant", content: assistantContent });
+
+      // Bug 4: persist intermediate tool_call and tool_result messages
+      // Bug 7: wrap DB writes in try/catch so failures don't kill the stream
+      try {
+        if (event.type === "tool_call") {
+          saveMessage(db, {
+            conversationId: convId,
+            role: "assistant",
+            content: null,
+            toolCalls: [event.call],
+          });
+        }
+        if (event.type === "tool_result") {
+          saveMessage(db, {
+            conversationId: convId,
+            role: "tool",
+            content: event.result,
+            toolCallId: event.callId,
+          });
+        }
+        if (event.type === "done" && assistantContent) {
+          saveMessage(db, { conversationId: convId, role: "assistant", content: assistantContent });
+        }
+      } catch {
+        // DB error during streaming -- don't kill the stream
       }
+
       yield event;
     }
   }
 
-  const stream = loopToSSEStream(tracked(), undefined);
+  const stream = loopToSSEStream(tracked());
   return new Response(stream, { headers: SSE_HEADERS });
 }

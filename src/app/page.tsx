@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { ConversationSidebar } from "@/components/chat/conversation-sidebar";
 import { ModelSelector } from "@/components/chat/model-selector";
 import { ChatSession } from "@/components/chat/chat-session";
+import { ErrorBoundary } from "@/components/chat/error-boundary";
 
 export default function ChatPage() {
   const [model, setModel] = useState("qwen2.5-coder");
@@ -22,7 +23,7 @@ export default function ChatPage() {
   }, []);
 
   return (
-    <div className="flex h-screen bg-background text-foreground dark">
+    <div className="flex h-screen bg-background text-foreground">
       <ConversationSidebar
         activeId={activeConvId}
         onSelect={handleSelectConversation}
@@ -35,12 +36,14 @@ export default function ChatPage() {
           <ModelSelector value={model} onChange={setModel} />
         </header>
 
-        <ChatSession
-          key={sessionKey}
-          model={model}
-          initialConvId={activeConvId}
-          onConversationCreated={setActiveConvId}
-        />
+        <ErrorBoundary>
+          <ChatSession
+            key={sessionKey}
+            model={model}
+            initialConvId={activeConvId}
+            onConversationCreated={setActiveConvId}
+          />
+        </ErrorBoundary>
       </main>
     </div>
   );

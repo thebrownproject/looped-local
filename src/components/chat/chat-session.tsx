@@ -118,28 +118,32 @@ export function ChatSession({ model, initialConvId, onConversationCreated }: Pro
               </div>
             </ConversationEmptyState>
           ) : (
-            messages.map((msg) =>
-              msg.role === "user" ? (
-                <Message key={msg.id} from="user">
-                  <MessageContent>
-                    <span>{msg.content}</span>
-                  </MessageContent>
-                </Message>
-              ) : (
+            messages.map((msg, i) => {
+              if (msg.role === "user") {
+                return (
+                  <Message key={msg.id} from="user">
+                    <MessageContent>
+                      <span>{msg.content}</span>
+                    </MessageContent>
+                  </Message>
+                );
+              }
+              const isLastAssistant = !messages.slice(i + 1).some((m) => m.role === "assistant");
+              return (
                 <AssistantMessage
                   key={msg.id}
                   msg={msg}
-                  isStreaming={isStreaming}
+                  isStreaming={isStreaming && isLastAssistant}
                 />
-              )
-            )
+              );
+            })
           )}
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
 
       {status === "error" && (
-        <div className="shrink-0 border-t border-destructive/20 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+        <div role="alert" className="shrink-0 border-t border-destructive/20 bg-destructive/10 px-4 py-2 text-xs text-destructive">
           Something went wrong. Check that Ollama is running and try again.
         </div>
       )}

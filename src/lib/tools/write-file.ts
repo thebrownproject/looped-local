@@ -35,7 +35,7 @@ export function createWriteFileTool(write: WriteFn = defaultWrite): ToolDefiniti
       if (!parsed.path || typeof parsed.path !== "string") {
         return "Error: missing required argument: path";
       }
-      if (parsed.content === undefined || parsed.content === null) {
+      if (parsed.content === undefined || parsed.content === null || typeof parsed.content !== "string") {
         return "Error: missing required argument: content";
       }
 

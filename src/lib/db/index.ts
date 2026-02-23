@@ -7,15 +7,16 @@ export * from "./queries";
 
 const DB_PATH = process.env.DB_PATH ?? "looped.db";
 
-let instance: ReturnType<typeof drizzle<typeof schema>> | null = null;
+type DbInstance = ReturnType<typeof drizzle<typeof schema>>;
+const globalForDb = globalThis as unknown as { _loopedDb?: DbInstance };
 
 export function getDb() {
-  if (instance) return instance;
+  if (globalForDb._loopedDb) return globalForDb._loopedDb;
 
   const sqlite = new Database(DB_PATH);
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
 
-  instance = drizzle(sqlite, { schema });
-  return instance;
+  globalForDb._loopedDb = drizzle(sqlite, { schema });
+  return globalForDb._loopedDb;
 }

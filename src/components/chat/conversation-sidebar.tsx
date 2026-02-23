@@ -20,25 +20,37 @@ interface Props {
 export function ConversationSidebar({ activeId, onSelect, onNew }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await fetch("/api/conversations");
-      if (res.ok) setConversations(await res.json());
-    } catch {
-      // silently fail
+      const res = await fetch("/api/conversations", { signal });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) setConversations(data);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
-
-  // Refresh when active conversation changes (new one was created)
-  useEffect(() => { if (activeId) load(); }, [activeId, load]);
+  // Single effect: fetches on mount and re-fetches when activeId changes
+  // AbortController prevents race conditions between overlapping fetches
+  useEffect(() => {
+    const controller = new AbortController();
+    // setState in load() only fires after async fetch, not synchronously
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- false positive: setState is behind await
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load, activeId]);
 
   const deleteConversation = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    await fetch(`/api/conversations/${id}`, { method: "DELETE" });
-    setConversations((prev) => prev.filter((c) => c.id !== id));
-    if (id === activeId) onNew();
+    try {
+      const res = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+      if (!res.ok) return;
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (id === activeId) onNew();
+    } catch {
+      // network error - leave state unchanged
+    }
   }, [activeId, onNew]);
 
   return (
@@ -54,11 +66,19 @@ export function ConversationSidebar({ activeId, onSelect, onNew }: Props) {
           <p className="px-2 py-4 text-xs text-muted-foreground text-center">No conversations yet</p>
         ) : (
           conversations.map((conv) => (
-            <button
+            <div
               key={conv.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelect(conv.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(conv.id);
+                }
+              }}
               className={cn(
-                "group flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent",
+                "group flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent cursor-pointer",
                 activeId === conv.id && "bg-sidebar-accent text-sidebar-accent-foreground"
               )}
             >
@@ -75,7 +95,7 @@ export function ConversationSidebar({ activeId, onSelect, onNew }: Props) {
               >
                 <Trash2Icon className="size-3" />
               </Button>
-            </button>
+            </div>
           ))
         )}
       </nav>
