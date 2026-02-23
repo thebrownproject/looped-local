@@ -121,4 +121,57 @@ describe("useAgentChat", () => {
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
     expect(body.conversationId).toBe("conv-123");
   });
+
+  it("loads history from API when initialConversationId is provided", async () => {
+    const storedMessages = [
+      { id: "m1", role: "user", content: "hello", toolCalls: undefined },
+      { id: "m2", role: "assistant", content: "hi there", toolCalls: undefined },
+    ];
+    vi.spyOn(global, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ conversation: { id: "conv-abc" }, messages: storedMessages }),
+    } as unknown as Response);
+
+    const { result } = renderHook(() => useAgentChat("conv-abc"));
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0].role).toBe("user");
+    expect(result.current.messages[0].content).toBe("hello");
+    expect(result.current.messages[1].role).toBe("assistant");
+    expect(result.current.messages[1].content).toBe("hi there");
+  });
+
+  it("skips tool result rows and maps tool calls to toolParts on history load", async () => {
+    const storedMessages = [
+      { id: "m1", role: "user", content: "run ls" },
+      {
+        id: "m2",
+        role: "assistant",
+        content: null,
+        toolCalls: [{ id: "c1", name: "bash", arguments: '{"cmd":"ls"}' }],
+      },
+      { id: "m3", role: "tool", content: "file.txt", toolCallId: "c1" },
+    ];
+    vi.spyOn(global, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ conversation: { id: "conv-xyz" }, messages: storedMessages }),
+    } as unknown as Response);
+
+    const { result } = renderHook(() => useAgentChat("conv-xyz"));
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(result.current.messages).toHaveLength(2);
+    const assistant = result.current.messages[1];
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.toolParts).toHaveLength(1);
+    expect(assistant.toolParts?.[0].toolName).toBe("bash");
+    expect(assistant.toolParts?.[0].state).toBe("output-available");
+  });
 });

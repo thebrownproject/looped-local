@@ -26,7 +26,6 @@ import { Terminal } from "@/components/ai-elements/terminal";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
 import { useAgentChat, type ChatMessage, type ToolPart } from "@/lib/hooks/use-agent-chat";
-import type { ChatStatus } from "ai";
 
 const SUGGESTIONS = [
   "What files are in this directory?",
@@ -74,11 +73,7 @@ interface Props {
 }
 
 export function ChatSession({ model, initialConvId, onConversationCreated }: Props) {
-  const { messages, status, sendMessage, setConversationId, conversationId } = useAgentChat();
-
-  useEffect(() => {
-    if (initialConvId) setConversationId(initialConvId);
-  }, [initialConvId, setConversationId]);
+  const { messages, status, sendMessage, conversationId } = useAgentChat(initialConvId);
 
   // Notify parent when hook creates a new conversation
   useEffect(() => {
@@ -155,7 +150,7 @@ export function ChatSession({ model, initialConvId, onConversationCreated }: Pro
             <PromptInputTextarea placeholder="Ask anything..." disabled={isStreaming} />
           </PromptInputBody>
           <PromptInputFooter>
-            <PromptInputSubmit status={status as ChatStatus} />
+            <PromptInputSubmit status={status} />
           </PromptInputFooter>
         </PromptInput>
       </div>

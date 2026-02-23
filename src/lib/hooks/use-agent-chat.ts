@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { LoopEvent } from "@/lib/engine/types";
 
 export type ToolState = "input-streaming" | "input-available" | "output-available" | "output-error";
@@ -23,6 +23,35 @@ export interface ChatMessage {
 }
 
 export type ChatStatus = "ready" | "submitted" | "streaming" | "error";
+
+// Map stored DB messages to ChatMessage[]. Tool result rows are merged into their
+// parent assistant message's toolParts, so we skip role=tool rows here.
+interface StoredMessage {
+  id: string;
+  role: string;
+  content: string | null;
+  toolCalls?: { id: string; name: string; arguments: string }[] | undefined;
+}
+
+function mapStoredMessages(rows: StoredMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const row of rows) {
+    if (row.role === "tool") continue;
+    if (row.role === "user") {
+      out.push({ id: row.id, role: "user", content: row.content ?? "" });
+    } else if (row.role === "assistant") {
+      const toolParts: ToolPart[] = (row.toolCalls ?? []).map((tc) => ({
+        type: "dynamic-tool",
+        toolName: tc.name,
+        toolCallId: tc.id,
+        state: "output-available",
+        input: (() => { try { return JSON.parse(tc.arguments); } catch { return tc.arguments; } })(),
+      }));
+      out.push({ id: row.id, role: "assistant", content: row.content ?? "", toolParts });
+    }
+  }
+  return out;
+}
 
 // Split SSE body into LoopEvents
 async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<LoopEvent> {
@@ -52,13 +81,28 @@ async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<LoopE
   }
 }
 
-export function useAgentChat() {
+export function useAgentChat(initialConversationId?: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("ready");
-  const [conversationId, setConversationIdState] = useState<string | undefined>(undefined);
-  const conversationIdRef = useRef<string | undefined>(undefined);
+  const [conversationId, setConversationIdState] = useState<string | undefined>(initialConversationId);
+  const conversationIdRef = useRef<string | undefined>(initialConversationId);
   // Ref mirrors messages state so async callbacks read the latest value
   const messagesRef = useRef<ChatMessage[]>([]);
+
+  // Load history when a conversationId is provided on mount
+  useEffect(() => {
+    if (!initialConversationId) return;
+    fetch(`/api/conversations/${initialConversationId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data?.messages) return;
+        const loaded = mapStoredMessages(data.messages as StoredMessage[]);
+        messagesRef.current = loaded;
+        setMessages(loaded);
+      })
+      .catch(() => {/* leave messages empty on error */});
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
 
   const setConversationId = useCallback((id: string) => {
     conversationIdRef.current = id;
