@@ -54,10 +54,10 @@ export async function POST(req: NextRequest) {
     const gen = runLoop({ provider, registry, config: { model, maxIterations: 20 }, messages: validatedMessages });
     for await (const event of gen) {
       if (event.type === "text") assistantContent += event.content;
-      yield event;
       if (event.type === "done") {
         saveMessage(db, { conversationId: convId, role: "assistant", content: assistantContent });
       }
+      yield event;
     }
   }
 

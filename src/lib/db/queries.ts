@@ -74,5 +74,6 @@ export function updateConversationTitle(db: Db, id: string, title: string) {
 }
 
 export function deleteConversation(db: Db, id: string) {
+  db.delete(messages).where(eq(messages.conversationId, id)).run();
   db.delete(conversations).where(eq(conversations.id, id)).run();
 }
