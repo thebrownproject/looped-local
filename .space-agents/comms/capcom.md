@@ -4,6 +4,57 @@
 
 ---
 
+## [2026-02-24 10:30] Session 3
+
+**Branch:** main | **Git:** uncommitted (new beads + exploration files)
+
+### What Happened
+
+Full brainstorm and planning session for Phase 2 enhancements. No code written, all exploration and planning.
+
+**Brainstorm explored two workstreams:**
+1. **Token streaming + reasoning display** - Current OllamaProvider uses `stream: false` (found in ollama.ts:49). All content arrives at once. qwen3:8b's `<think>` tags render as literal text. Need: switch to `stream: true`, add think-tag state machine in provider, yield `thinking` and `text_delta` events through generators-all-the-way-down pipeline, build AI Elements Reasoning component with auto-open/close and "Thought for N seconds" timer.
+
+2. **UI polish (Codex-inspired)** - No font configured (browser defaults!), hard-coded dark mode, plain sidebar, model selector in wrong place, no logo. Need: shadcn sidebar-08 (inset variant) for rounded chat container, Geist font, next-themes for dark/light toggle, model selector in input bar, logo from assets/icon.png (purple infinity symbol).
+
+**Research agents deployed:**
+- Streaming architecture agent: mapped full pipeline (provider -> loop -> SSE adapter -> hook -> UI), confirmed `stream: false`, no think parsing, `Streamdown` already handles incremental text
+- UI state agent: catalogued all components, found PromptInput is 1344 lines but only 5% used, MessageActions built but unwired, 16 shadcn components installed
+
+**Planning council convened (3 sequential agents):**
+- Task planner: broke into 8 tasks across 2 workstreams
+- Sequencer: recommended WS2 first (6->7->8->1->2->3->4->5), WS2 avoids chat-session.tsx merge conflict
+- Implementer: provided detailed TDD steps with code for all 8 tasks
+
+**Beads created:**
+- looped-504 (feature): Streaming + Reasoning Display & UI Polish
+- 8 tasks: 504.1 through 504.8 with full dependency chain
+- WS2: 504.1 -> 504.2 -> 504.3 (UI polish)
+- WS1: 504.4 -> 504.5 -> 504.6 -> 504.7 -> 504.8 (streaming)
+
+### Decisions Made
+- Provider interface: AsyncGenerator (not callback or dual-mode)
+- Think-tag parsing: in provider layer (not loop or middleware), each provider handles its own model quirks
+- Reasoning UX: timer + collapsible (auto-open during thinking, collapse to "Thought for N seconds")
+- Sequencing: WS2 first for quick wins, then WS1 uninterrupted
+- Font: Geist (via next/font/google)
+- Theme: next-themes with sidebar footer toggle
+- Input bar: simple (model selector + textarea + submit, no extras)
+- Tests: refactor existing mocks to AsyncGenerator (not dual test suites)
+- Borders: no horizontal line dividers/separators, but container/box borders are fine
+
+### Gotchas
+- No font configured at all in layout.tsx (browser defaults). Biggest quick-win visual fix.
+- PromptInput component has 1344 lines of built-in capability (attachments, command palette, file dialogs) but chat only uses ~5% of it
+- MessageActions and MessageBranch systems are fully built but not wired up
+- Light mode CSS variables already exist in globals.css, just need toggle mechanism
+- Legacy beads database needed `bd migrate --update-repo-id` at session start
+
+### Next Action
+- Run `/mission` to start executing. Two tasks ready: 504.1 (install deps/font/theme) and 504.4 (provider types). Can run in parallel.
+
+---
+
 ## [2026-02-23] System Initialized
 
 Space-Agents installed. HOUSTON standing by.
