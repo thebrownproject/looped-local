@@ -1,9 +1,11 @@
 import { eq, asc, desc } from "drizzle-orm";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 import { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { conversations, messages } from "./schema";
 import type { ToolCall, MessageRole } from "@/lib/engine/types";
 
-type Db = BetterSQLite3Database;
+// Accept any Drizzle/BetterSQLite3 instance regardless of schema type parameter
+type Db = BetterSQLite3Database<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 export function createConversation(db: Db, title: string) {
   const now = Date.now();
@@ -69,4 +71,8 @@ export function updateConversationTitle(db: Db, id: string, title: string) {
     .set({ title, updatedAt: Date.now() })
     .where(eq(conversations.id, id))
     .run();
+}
+
+export function deleteConversation(db: Db, id: string) {
+  db.delete(conversations).where(eq(conversations.id, id)).run();
 }
