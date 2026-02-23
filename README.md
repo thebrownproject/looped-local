@@ -1,6 +1,19 @@
-# Looped
+<div align="center">
+  <img src="assets/icon.png" alt="Looped" width="128">
+  <h1>Looped</h1>
+</div>
 
-**Your local AI agent. Your rules. Your machine.**
+<p align="center">
+  <strong>Your local AI agent. Your rules. Your machine.</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Next.js-000000?logo=nextdotjs&logoColor=white" alt="Next.js">
+  <img src="https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Ollama-000000?logo=ollama&logoColor=white" alt="Ollama">
+  <img src="https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white" alt="SQLite">
+  <img src="https://img.shields.io/badge/Tailwind_CSS-06B6D4?logo=tailwindcss&logoColor=white" alt="Tailwind CSS">
+</p>
 
 An autonomous AI agent that runs a custom inference loop against local Ollama models. It pulls context, decides whether to use a tool, executes it, feeds the result back, and keeps going until it has a real answer. Everything runs locally. No cloud APIs, no telemetry, no middleman.
 
