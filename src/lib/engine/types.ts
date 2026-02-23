@@ -64,6 +64,8 @@ export interface LoopConfig {
  * The API route converts these into SSE frames for the frontend.
  */
 export type LoopEvent =
+  | { type: "thinking"; content: string }
+  | { type: "text_delta"; content: string }
   | { type: "text"; content: string }
   | { type: "tool_call"; call: ToolCall }
   | { type: "tool_result"; callId: string; result: string }

@@ -8,17 +8,20 @@
 import type {
   LLMResponse,
   Message,
+  ToolCall,
   ToolDefinitionForLLM,
 } from "@/lib/engine/types";
 
+export type ProviderEvent =
+  | { type: "thinking"; content: string }
+  | { type: "text_delta"; content: string }
+  | { type: "tool_calls"; calls: ToolCall[] };
+
 export interface Provider {
-  /**
-   * Send a conversation and available tools to the LLM.
-   * Returns a normalized response the engine can act on.
-   */
+  /** Stream provider events for a conversation. */
   chat(
     messages: Message[],
     tools: ToolDefinitionForLLM[],
     model: string
-  ): Promise<LLMResponse>;
+  ): AsyncGenerator<ProviderEvent>;
 }

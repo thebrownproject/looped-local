@@ -20,6 +20,8 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   toolParts?: ToolPart[];
+  reasoning?: string;
+  thinkingDuration?: number;
 }
 
 export type ChatStatus = "ready" | "submitted" | "streaming" | "error";
@@ -64,7 +66,7 @@ function mapStoredMessages(rows: StoredMessage[]): ChatMessage[] {
 }
 
 const VALID_EVENT_TYPES = new Set([
-  "text", "tool_call", "tool_result", "conversation", "error", "done",
+  "thinking", "text_delta", "text", "tool_call", "tool_result", "conversation", "error", "done",
 ]);
 
 function isLoopEvent(data: unknown): data is LoopEvent {
