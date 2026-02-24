@@ -25,6 +25,7 @@ import {
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
+import { ModelSelector } from "@/components/chat/model-selector";
 import { useAgentChat, type ChatMessage, type ToolPart } from "@/lib/hooks/use-agent-chat";
 
 const SUGGESTIONS = [
@@ -68,11 +69,12 @@ function AssistantMessage({ msg, isStreaming }: { msg: ChatMessage; isStreaming:
 
 interface Props {
   model: string;
+  onModelChange: (model: string) => void;
   initialConvId?: string;
   onConversationCreated?: (id: string) => void;
 }
 
-export function ChatSession({ model, initialConvId, onConversationCreated }: Props) {
+export function ChatSession({ model, onModelChange, initialConvId, onConversationCreated }: Props) {
   const { messages, status, sendMessage, conversationId } = useAgentChat(initialConvId);
 
   // Notify parent when hook creates a new conversation
@@ -98,14 +100,9 @@ export function ChatSession({ model, initialConvId, onConversationCreated }: Pro
       <Conversation className="flex-1">
         <ConversationContent>
           {messages.length === 0 ? (
-            <ConversationEmptyState>
+            <ConversationEmptyState className="!justify-end pb-4">
               <div className="space-y-4">
-                <div className="space-y-1">
-                  <h3 className="font-medium text-sm">What can I help you with?</h3>
-                  <p className="text-muted-foreground text-sm">
-                    Ask me anything - I can run bash commands, read files, and more.
-                  </p>
-                </div>
+                <h3 className="text-4xl font-semibold">What can I help you with?</h3>
                 <Suggestions>
                   {SUGGESTIONS.map((s) => (
                     <Suggestion
@@ -143,7 +140,7 @@ export function ChatSession({ model, initialConvId, onConversationCreated }: Pro
       </Conversation>
 
       {status === "error" && (
-        <div role="alert" className="shrink-0 border-t border-destructive/20 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+        <div role="alert" className="shrink-0 bg-destructive/10 px-4 py-2 text-xs text-destructive">
           Something went wrong. Check that Ollama is running and try again.
         </div>
       )}
@@ -154,6 +151,7 @@ export function ChatSession({ model, initialConvId, onConversationCreated }: Pro
             <PromptInputTextarea placeholder="Ask anything..." disabled={isStreaming} />
           </PromptInputBody>
           <PromptInputFooter>
+            <ModelSelector value={model} onChange={onModelChange} />
             <PromptInputSubmit status={status} />
           </PromptInputFooter>
         </PromptInput>

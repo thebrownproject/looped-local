@@ -35,7 +35,7 @@ export function ModelSelector({ value, onChange }: Props) {
 
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="h-8 w-48 text-xs">
+      <SelectTrigger className="h-8 w-auto border-none bg-transparent text-xs font-medium text-muted-foreground shadow-none hover:text-foreground focus:ring-0">
         <SelectValue placeholder="Select model" />
       </SelectTrigger>
       <SelectContent>

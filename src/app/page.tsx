@@ -7,7 +7,7 @@ import { ErrorBoundary } from "@/components/chat/error-boundary";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 
 export default function ChatPage() {
-  const [model] = useState("qwen2.5-coder");
+  const [model, setModel] = useState("qwen2.5-coder");
   // sessionKey remounts ChatSession to reset hook state on new conversation
   const [sessionKey, setSessionKey] = useState(0);
   const [activeConvId, setActiveConvId] = useState<string | undefined>(undefined);
@@ -37,6 +37,7 @@ export default function ChatPage() {
           <ChatSession
             key={sessionKey}
             model={model}
+            onModelChange={setModel}
             initialConvId={activeConvId}
             onConversationCreated={setActiveConvId}
           />
