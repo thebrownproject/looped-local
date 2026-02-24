@@ -156,3 +156,48 @@ Key fixes: conversationId returned via new LoopEvent, AbortController on all fet
 - Consider Phase 2: self-extending tools, conversation search
 
 ---
+
+## [2026-02-24 12:35] Session 4
+
+**Branch:** main | **Git:** committed + pushed
+
+### What Happened
+
+Full orchestrated mission execution for feature looped-504 (Streaming + Reasoning Display & UI Polish). All 8 tasks completed via Pathfinder/Builder/Inspector cycle. 148/148 tests passing. `next build` clean.
+
+**Task execution order (two parallel tracks):**
+
+UI Track:
+1. `looped-504.1` - Installed `next-themes` + shadcn sidebar, configured Geist fonts via `next/font/google`, wrapped app in `ThemeProvider` (attribute="class", defaultTheme="dark"), removed hard-coded `dark` class from html, added `suppressHydrationWarning`. Updated `globals.css` `@theme inline` block with `--font-sans`/`--font-mono` for Tailwind v4.
+2. `looped-504.2` - Rebuilt `conversation-sidebar.tsx` with `Sidebar(variant="inset")`, `SidebarHeader` (icon + "Looped"), `SidebarContent` (SidebarMenu items), `SidebarFooter` (ThemeToggle). Created `src/components/chat/theme-toggle.tsx` using `resolvedTheme`. Updated `page.tsx` with `SidebarProvider`/`SidebarInset`/`SidebarTrigger`. Removed all horizontal line dividers.
+3. `looped-504.3` - Moved `ModelSelector` into `PromptInputFooter` inside `chat-session.tsx`. Removed header bar. Restyled trigger to `border-none bg-transparent shadow-none`. Redesigned empty state: `!justify-end pb-4`, heading at `text-4xl font-semibold`.
+
+Streaming Track:
+4. `looped-504.4` - Added `ProviderEvent` union (`thinking | text_delta | tool_calls`) to `providers/types.ts`. Changed `Provider.chat()` return type to `AsyncGenerator<ProviderEvent>`. Extended `LoopEvent` union with `thinking` and `text_delta`. Added `reasoning?` and `thinkingDuration?` to `ChatMessage`.
+5. `looped-504.5` - Rewrote `ollama.ts` with `stream:true`, `parseNDJSON()` async generator with `TextDecoder({ stream: true })`. Implemented `processThinkChunk()` think-tag state machine (outside|maybe_open|inside|maybe_close), char-by-char, state persists across NDJSON chunk boundaries. 15/15 ollama tests.
+6. `looped-504.6` - Rewrote `loop.ts` inner loop to `for await` over AsyncGenerator. Forwards `thinking`/`text_delta` immediately, yields terminal `text` for backward compat. Updated `route.ts` to accumulate `text_delta` for DB persistence. Refactored all 19 loop tests to `makeStreamingProvider()`. 137/137 tests.
+7. `looped-504.7` - Added `thinkingStartRef` (useRef) and `receivedTextDelta` (local boolean) to `use-agent-chat.ts`. `thinking` handler starts timer and appends to `reasoning`. `text_delta` handler stops timer, sets `thinkingDuration`, appends to `content`. `text` handler guarded by `!receivedTextDelta` to prevent duplication. 23/23 hook tests.
+8. `looped-504.8` - Created `src/components/ai-elements/reasoning.tsx` compound component (Reasoning/ReasoningTrigger/ReasoningContent) following `tool.tsx` Collapsible pattern. Auto-opens when `isThinking`, auto-closes when `thinkingDuration` set. ReasoningTrigger shows "Thinking..." (pulse) or "Thought for N seconds". Integrated above toolParts in `AssistantMessage`. Shimmer guards `!msg.reasoning`. 148/148 tests.
+
+### Decisions Made
+
+- `receivedTextDelta` as local boolean per `sendMessage` call (not a ref) — guards against terminal `text` event duplicating streamed content
+- `isThinking` derived as `isStreaming && !!msg.reasoning && !msg.thinkingDuration`
+- `resolvedTheme` (not `theme`) in ThemeToggle — correctly handles system theme
+- `TextDecoder({ stream: true })` in `parseNDJSON` — prevents multi-byte UTF-8 corruption across chunk boundaries
+- Terminal `text` event still yielded by loop for backward compatibility
+
+### Gotchas
+
+- Tailwind v4 font overrides go in `globals.css` `@theme inline` block, NOT `tailwind.config.ts`
+- Awaiting an AsyncGenerator returns the generator object — caused pre-existing loop failures until `for await` fixed
+- shadcn `ConversationEmptyState` has `justify-center` hardcoded — needs `!justify-end` to override specificity
+- `ThinkMachineState` must be passed by reference so state persists across NDJSON frame boundaries
+- `thinkingDuration=undefined` renders "Thought for undefined seconds" on interrupted streams (info-level, not fixed)
+
+### Next Action
+
+- Test app end-to-end with qwen3:8b via Ollama — verify streaming tokens render live, think-tag reasoning panel appears/collapses correctly
+- Consider Phase 2: self-extending tools, conversation search
+
+---
