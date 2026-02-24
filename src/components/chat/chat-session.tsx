@@ -148,7 +148,7 @@ export function ChatSession({ model, initialConvId, onConversationCreated }: Pro
         </div>
       )}
 
-      <div className="shrink-0 border-t p-4">
+      <div className="shrink-0 p-4">
         <PromptInput onSubmit={(msg) => handleSubmit({ text: msg.text })}>
           <PromptInputBody>
             <PromptInputTextarea placeholder="Ask anything..." disabled={isStreaming} />

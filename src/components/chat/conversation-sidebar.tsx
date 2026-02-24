@@ -1,9 +1,20 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import Image from "next/image";
 import { PlusIcon, MessageSquareIcon, Trash2Icon } from "lucide-react";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@/components/ui/sidebar";
+import { ThemeToggle } from "@/components/chat/theme-toggle";
+import { Button } from "@/components/ui/button";
 
 interface Conversation {
   id: string;
@@ -31,74 +42,76 @@ export function ConversationSidebar({ activeId, onSelect, onNew }: Props) {
     }
   }, []);
 
-  // Single effect: fetches on mount and re-fetches when activeId changes
-  // AbortController prevents race conditions between overlapping fetches
+  // Fetches on mount and re-fetches when activeId changes.
+  // AbortController prevents race conditions between overlapping fetches.
   useEffect(() => {
     const controller = new AbortController();
-    // setState in load() only fires after async fetch, not synchronously
     // eslint-disable-next-line react-hooks/set-state-in-effect -- false positive: setState is behind await
     load(controller.signal);
     return () => controller.abort();
   }, [load, activeId]);
 
-  const deleteConversation = useCallback(async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      const res = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
-      if (!res.ok) return;
-      setConversations((prev) => prev.filter((c) => c.id !== id));
-      if (id === activeId) onNew();
-    } catch {
-      // network error - leave state unchanged
-    }
-  }, [activeId, onNew]);
+  const deleteConversation = useCallback(
+    async (id: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        const res = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+        if (!res.ok) return;
+        setConversations((prev) => prev.filter((c) => c.id !== id));
+        if (id === activeId) onNew();
+      } catch {
+        // network error - leave state unchanged
+      }
+    },
+    [activeId, onNew]
+  );
 
   return (
-    <aside className="flex h-full w-64 flex-col border-r bg-sidebar">
-      <div className="flex items-center justify-between p-4 border-b">
-        <h1 className="font-semibold text-sm text-sidebar-foreground">Looped</h1>
-        <Button variant="ghost" size="icon" onClick={onNew} title="New conversation">
+    <Sidebar variant="inset">
+      <SidebarHeader className="flex-row items-center gap-2 p-4">
+        <Image src="/icon.png" alt="Looped logo" width={24} height={24} className="shrink-0" />
+        <span className="font-semibold text-sm text-sidebar-foreground">Looped</span>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onNew}
+          title="New conversation"
+          className="ml-auto"
+        >
           <PlusIcon className="size-4" />
         </Button>
-      </div>
-      <nav className="flex-1 overflow-y-auto p-2">
+      </SidebarHeader>
+
+      <SidebarContent>
         {conversations.length === 0 ? (
-          <p className="px-2 py-4 text-xs text-muted-foreground text-center">No conversations yet</p>
+          <p className="px-4 py-4 text-xs text-muted-foreground text-center">No conversations yet</p>
         ) : (
-          conversations.map((conv) => (
-            <div
-              key={conv.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(conv.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onSelect(conv.id);
-                }
-              }}
-              className={cn(
-                "group flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent cursor-pointer",
-                activeId === conv.id && "bg-sidebar-accent text-sidebar-accent-foreground"
-              )}
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate text-sidebar-foreground">{conv.title}</span>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-6 shrink-0 opacity-0 group-hover:opacity-100"
-                onClick={(e) => deleteConversation(conv.id, e)}
-                title="Delete"
-              >
-                <Trash2Icon className="size-3" />
-              </Button>
-            </div>
-          ))
+          <SidebarMenu>
+            {conversations.map((conv) => (
+              <SidebarMenuItem key={conv.id}>
+                <SidebarMenuButton
+                  isActive={activeId === conv.id}
+                  onClick={() => onSelect(conv.id)}
+                >
+                  <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{conv.title}</span>
+                </SidebarMenuButton>
+                <SidebarMenuAction
+                  showOnHover
+                  onClick={(e) => deleteConversation(conv.id, e)}
+                  title="Delete"
+                >
+                  <Trash2Icon className="size-3" />
+                </SidebarMenuAction>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
         )}
-      </nav>
-    </aside>
+      </SidebarContent>
+
+      <SidebarFooter className="flex-row items-center justify-end p-2">
+        <ThemeToggle />
+      </SidebarFooter>
+    </Sidebar>
   );
 }

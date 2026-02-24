@@ -2,12 +2,12 @@
 
 import { useCallback, useState } from "react";
 import { ConversationSidebar } from "@/components/chat/conversation-sidebar";
-import { ModelSelector } from "@/components/chat/model-selector";
 import { ChatSession } from "@/components/chat/chat-session";
 import { ErrorBoundary } from "@/components/chat/error-boundary";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 
 export default function ChatPage() {
-  const [model, setModel] = useState("qwen2.5-coder");
+  const [model] = useState("qwen2.5-coder");
   // sessionKey remounts ChatSession to reset hook state on new conversation
   const [sessionKey, setSessionKey] = useState(0);
   const [activeConvId, setActiveConvId] = useState<string | undefined>(undefined);
@@ -23,19 +23,16 @@ export default function ChatPage() {
   }, []);
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
+    <SidebarProvider>
       <ConversationSidebar
         activeId={activeConvId}
         onSelect={handleSelectConversation}
         onNew={handleNew}
       />
-
-      <main className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex items-center justify-between border-b px-4 py-2 shrink-0">
-          <span className="text-sm text-muted-foreground">Looped Agent</span>
-          <ModelSelector value={model} onChange={setModel} />
-        </header>
-
+      <SidebarInset>
+        <div className="flex items-center px-4 py-2 shrink-0">
+          <SidebarTrigger />
+        </div>
         <ErrorBoundary>
           <ChatSession
             key={sessionKey}
@@ -44,7 +41,7 @@ export default function ChatPage() {
             onConversationCreated={setActiveConvId}
           />
         </ErrorBoundary>
-      </main>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
