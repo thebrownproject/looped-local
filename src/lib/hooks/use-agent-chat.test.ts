@@ -358,6 +358,116 @@ describe("useAgentChat", () => {
     expect(result.current.status).toBe("ready");
   });
 
+  // --- text_delta and thinking handler tests ---
+
+  it("text_delta events accumulate into assistant message content", async () => {
+    mockFetch([
+      { type: "text_delta", content: "Hello " },
+      { type: "text_delta", content: "world" },
+      { type: "done" },
+    ]);
+    const { result } = renderHook(() => useAgentChat());
+
+    await act(async () => {
+      await result.current.sendMessage("hi");
+    });
+
+    const assistant = result.current.messages.find((m) => m.role === "assistant");
+    expect(assistant?.content).toBe("Hello world");
+  });
+
+  it("thinking events accumulate into reasoning field", async () => {
+    mockFetch([
+      { type: "thinking", content: "Let me " },
+      { type: "thinking", content: "think..." },
+      { type: "done" },
+    ]);
+    const { result } = renderHook(() => useAgentChat());
+
+    await act(async () => {
+      await result.current.sendMessage("hi");
+    });
+
+    const assistant = result.current.messages.find((m) => m.role === "assistant");
+    expect(assistant?.reasoning).toBe("Let me think...");
+  });
+
+  it("thinkingDuration is calculated from first thinking to first text_delta", async () => {
+    vi.useFakeTimers();
+
+    mockFetch([
+      { type: "thinking", content: "thinking..." },
+      { type: "text_delta", content: "answer" },
+      { type: "done" },
+    ]);
+    const { result } = renderHook(() => useAgentChat());
+
+    const sendPromise = act(async () => {
+      const p = result.current.sendMessage("hi");
+      vi.advanceTimersByTime(500);
+      await p;
+    });
+    await sendPromise;
+
+    vi.useRealTimers();
+
+    const assistant = result.current.messages.find((m) => m.role === "assistant");
+    expect(typeof assistant?.thinkingDuration).toBe("number");
+    expect(assistant!.thinkingDuration!).toBeGreaterThanOrEqual(0);
+  });
+
+  it("mixed thinking then text_delta produces correct state", async () => {
+    mockFetch([
+      { type: "thinking", content: "Let me reason." },
+      { type: "text_delta", content: "The answer is 42." },
+      { type: "done" },
+    ]);
+    const { result } = renderHook(() => useAgentChat());
+
+    await act(async () => {
+      await result.current.sendMessage("what is the answer?");
+    });
+
+    const assistant = result.current.messages.find((m) => m.role === "assistant");
+    expect(assistant?.reasoning).toBe("Let me reason.");
+    expect(assistant?.content).toBe("The answer is 42.");
+    expect(typeof assistant?.thinkingDuration).toBe("number");
+  });
+
+  it("text events still work for backward compat (no text_delta)", async () => {
+    mockFetch([
+      { type: "text", content: "Hello " },
+      { type: "text", content: "world" },
+      { type: "done" },
+    ]);
+    const { result } = renderHook(() => useAgentChat());
+
+    await act(async () => {
+      await result.current.sendMessage("hi");
+    });
+
+    const assistant = result.current.messages.find((m) => m.role === "assistant");
+    expect(assistant?.content).toBe("Hello world");
+    expect(assistant?.reasoning).toBeUndefined();
+    expect(assistant?.thinkingDuration).toBeUndefined();
+  });
+
+  it("text event after text_delta does not duplicate content", async () => {
+    mockFetch([
+      { type: "text_delta", content: "streamed" },
+      { type: "text", content: "streamed" }, // terminal compat event - should be ignored
+      { type: "done" },
+    ]);
+    const { result } = renderHook(() => useAgentChat());
+
+    await act(async () => {
+      await result.current.sendMessage("hi");
+    });
+
+    const assistant = result.current.messages.find((m) => m.role === "assistant");
+    expect(assistant?.content).toBe("streamed");
+  });
+
   // SSE edge case: multiple frames in a single chunk
   it("handles multiple SSE frames in a single chunk", async () => {
     const encoder = new TextEncoder();

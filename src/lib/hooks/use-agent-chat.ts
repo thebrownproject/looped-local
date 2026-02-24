@@ -131,6 +131,7 @@ export function useAgentChat(initialConversationId?: string) {
   const messagesRef = useRef<ChatMessage[]>([]);
   const statusRef = useRef<ChatStatus>("ready");
   const abortRef = useRef<AbortController | null>(null);
+  const thinkingStartRef = useRef<number | null>(null);
 
   // Bug 8: Sync messagesRef via useEffect instead of inside setState updater
   useEffect(() => {
@@ -222,15 +223,34 @@ export function useAgentChat(initialConversationId?: string) {
     setStatus("streaming");
     statusRef.current = "streaming";
 
+    thinkingStartRef.current = null;
+
     const toolMap = new Map<string, ToolPart>();
+    let receivedTextDelta = false;
 
     const updateAssistant = (updater: (m: ChatMessage) => ChatMessage) => {
       setMessages((prev) => prev.map((m) => (m.id === assistantId ? updater(m) : m)));
     };
 
     for await (const event of parseSSE(response.body)) {
-      if (event.type === "text") {
+      if (event.type === "thinking") {
+        if (thinkingStartRef.current === null) thinkingStartRef.current = Date.now();
+        updateAssistant((m) => ({ ...m, reasoning: (m.reasoning ?? "") + event.content }));
+      } else if (event.type === "text_delta") {
+        if (!receivedTextDelta) {
+          receivedTextDelta = true;
+          if (thinkingStartRef.current !== null) {
+            const duration = Date.now() - thinkingStartRef.current;
+            thinkingStartRef.current = null;
+            updateAssistant((m) => ({ ...m, thinkingDuration: duration }));
+          }
+        }
         updateAssistant((m) => ({ ...m, content: m.content + event.content }));
+      } else if (event.type === "text") {
+        // backward compat: only use if no text_delta received (streaming models use text_delta)
+        if (!receivedTextDelta) {
+          updateAssistant((m) => ({ ...m, content: m.content + event.content }));
+        }
       } else if (event.type === "tool_call") {
         const part: ToolPart = {
           type: "dynamic-tool",
