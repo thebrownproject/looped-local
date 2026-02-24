@@ -24,6 +24,7 @@ import {
 } from "@/components/ai-elements/tool";
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { Reasoning, ReasoningTrigger, ReasoningContent } from "@/components/ai-elements/reasoning";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
 import { ModelSelector } from "@/components/chat/model-selector";
 import { useAgentChat, type ChatMessage, type ToolPart } from "@/lib/hooks/use-agent-chat";
@@ -52,14 +53,24 @@ function ToolCallCard({ part }: { part: ToolPart }) {
 }
 
 function AssistantMessage({ msg, isStreaming }: { msg: ChatMessage; isStreaming: boolean }) {
+  const isThinking = isStreaming && !!msg.reasoning && !msg.thinkingDuration;
+
   return (
     <Message from="assistant">
       <MessageContent>
+        {msg.reasoning && (
+          <Reasoning isThinking={isThinking} thinkingDuration={msg.thinkingDuration}>
+            <ReasoningTrigger isThinking={isThinking} thinkingDuration={msg.thinkingDuration} />
+            <ReasoningContent>
+              <MessageResponse className="text-xs">{msg.reasoning}</MessageResponse>
+            </ReasoningContent>
+          </Reasoning>
+        )}
         {msg.toolParts?.map((part) => (
           <ToolCallCard key={part.toolCallId} part={part} />
         ))}
         {msg.content && <MessageResponse>{msg.content}</MessageResponse>}
-        {isStreaming && !msg.content && !msg.toolParts?.length && (
+        {isStreaming && !msg.content && !msg.toolParts?.length && !msg.reasoning && (
           <Shimmer className="text-xs">Thinking...</Shimmer>
         )}
       </MessageContent>
