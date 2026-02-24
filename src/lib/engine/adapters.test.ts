@@ -100,4 +100,16 @@ describe("loopToSSEStream", () => {
     await reader.cancel();
     expect(onCancel).toHaveBeenCalledOnce();
   });
+
+  it("formats thinking event as SSE frame", async () => {
+    const stream = loopToSSEStream(makeGen([{ type: "thinking", content: "hmm..." }, { type: "done" }]));
+    const frames = await collectFrames(stream);
+    expect(frames[0]).toBe('data: {"type":"thinking","content":"hmm..."}\n\n');
+  });
+
+  it("formats text_delta event as SSE frame", async () => {
+    const stream = loopToSSEStream(makeGen([{ type: "text_delta", content: "tok" }, { type: "done" }]));
+    const frames = await collectFrames(stream);
+    expect(frames[0]).toBe('data: {"type":"text_delta","content":"tok"}\n\n');
+  });
 });

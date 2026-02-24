@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { runLoop } from "./loop";
-import type { Provider } from "@/lib/providers/types";
-import type { LLMResponse, LoopEvent, Message, ToolCall } from "@/lib/engine/types";
+import type { Provider, ProviderEvent } from "@/lib/providers/types";
+import type { LoopEvent, Message, ToolCall } from "@/lib/engine/types";
 import { ToolRegistry } from "@/lib/tools/registry";
 
 async function collect(gen: AsyncGenerator<LoopEvent>): Promise<LoopEvent[]> {
@@ -10,12 +10,14 @@ async function collect(gen: AsyncGenerator<LoopEvent>): Promise<LoopEvent[]> {
   return events;
 }
 
-function makeProvider(responses: LLMResponse[]): Provider {
+// Returns a Provider whose chat() is an async generator yielding events per call
+function makeStreamingProvider(callSequences: ProviderEvent[][]): Provider {
   let i = 0;
   return {
-    chat: vi.fn().mockImplementation(() => {
-      if (i >= responses.length) throw new Error("mock exhausted");
-      return Promise.resolve(responses[i++]);
+    chat: vi.fn().mockImplementation(async function* () {
+      if (i >= callSequences.length) throw new Error("mock exhausted");
+      const events = callSequences[i++];
+      for (const e of events) yield e;
     }),
   };
 }
@@ -38,12 +40,13 @@ describe("runLoop", () => {
   // -- Direct text response --
 
   it("yields [text, done] for a direct text response", async () => {
-    const provider = makeProvider([{ type: "text", content: "Hello!" }]);
+    const provider = makeStreamingProvider([[{ type: "text_delta", content: "Hello!" }]]);
     const registry = makeRegistry();
 
     const events = await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
 
     expect(events).toEqual([
+      { type: "text_delta", content: "Hello!" },
       { type: "text", content: "Hello!" },
       { type: "done" },
     ]);
@@ -53,9 +56,9 @@ describe("runLoop", () => {
 
   it("yields [tool_call, tool_result, text, done] for a single tool call", async () => {
     const call: ToolCall = { id: "call_1", name: "bash", arguments: '{"cmd":"ls"}' };
-    const provider = makeProvider([
-      { type: "tool_calls", calls: [call] },
-      { type: "text", content: "Done" },
+    const provider = makeStreamingProvider([
+      [{ type: "tool_calls", calls: [call] }],
+      [{ type: "text_delta", content: "Done" }],
     ]);
     const registry = makeRegistry({ bash: "file1.txt" });
 
@@ -64,6 +67,7 @@ describe("runLoop", () => {
     expect(events).toEqual([
       { type: "tool_call", call },
       { type: "tool_result", callId: "call_1", result: "file1.txt" },
+      { type: "text_delta", content: "Done" },
       { type: "text", content: "Done" },
       { type: "done" },
     ]);
@@ -74,9 +78,9 @@ describe("runLoop", () => {
   it("processes multiple tool calls in a single response", async () => {
     const call1: ToolCall = { id: "c1", name: "bash", arguments: '{"cmd":"pwd"}' };
     const call2: ToolCall = { id: "c2", name: "read", arguments: '{"path":"/tmp/x"}' };
-    const provider = makeProvider([
-      { type: "tool_calls", calls: [call1, call2] },
-      { type: "text", content: "Got both results" },
+    const provider = makeStreamingProvider([
+      [{ type: "tool_calls", calls: [call1, call2] }],
+      [{ type: "text_delta", content: "Got both results" }],
     ]);
     const registry = makeRegistry({ bash: "/home", read: "file content" });
 
@@ -87,6 +91,7 @@ describe("runLoop", () => {
       { type: "tool_result", callId: "c1", result: "/home" },
       { type: "tool_call", call: call2 },
       { type: "tool_result", callId: "c2", result: "file content" },
+      { type: "text_delta", content: "Got both results" },
       { type: "text", content: "Got both results" },
       { type: "done" },
     ]);
@@ -97,23 +102,23 @@ describe("runLoop", () => {
   it("handles multi-turn tool calls across iterations", async () => {
     const call1: ToolCall = { id: "c1", name: "bash", arguments: '{"cmd":"pwd"}' };
     const call2: ToolCall = { id: "c2", name: "bash", arguments: '{"cmd":"ls"}' };
-    const provider = makeProvider([
-      { type: "tool_calls", calls: [call1] },
-      { type: "tool_calls", calls: [call2] },
-      { type: "text", content: "All done" },
+    const provider = makeStreamingProvider([
+      [{ type: "tool_calls", calls: [call1] }],
+      [{ type: "tool_calls", calls: [call2] }],
+      [{ type: "text_delta", content: "All done" }],
     ]);
     const registry = makeRegistry({ bash: "result" });
 
     const events = await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
 
     const types = events.map((e) => e.type);
-    expect(types).toEqual(["tool_call", "tool_result", "tool_call", "tool_result", "text", "done"]);
+    expect(types).toEqual(["tool_call", "tool_result", "tool_call", "tool_result", "text_delta", "text", "done"]);
   });
 
   // -- Empty tool_calls array --
 
   it("yields error for empty tool_calls array instead of corrupting context", async () => {
-    const provider = makeProvider([{ type: "tool_calls", calls: [] }]);
+    const provider = makeStreamingProvider([[{ type: "tool_calls", calls: [] }]]);
     const registry = makeRegistry();
 
     const events = await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
@@ -128,7 +133,9 @@ describe("runLoop", () => {
 
   it("stops with error event when max iterations is reached", async () => {
     const call: ToolCall = { id: "c1", name: "bash", arguments: "{}" };
-    const provider = makeProvider(Array(5).fill({ type: "tool_calls", calls: [call] }));
+    const provider = makeStreamingProvider(
+      Array(5).fill([{ type: "tool_calls", calls: [call] }])
+    );
     const registry = makeRegistry({ bash: "ok" });
 
     const events = await collect(
@@ -147,7 +154,7 @@ describe("runLoop", () => {
   // -- maxIterations: 0 --
 
   it("yields error for maxIterations: 0", async () => {
-    const provider = makeProvider([{ type: "text", content: "Never reached" }]);
+    const provider = makeStreamingProvider([[{ type: "text_delta", content: "Never reached" }]]);
     const registry = makeRegistry();
 
     const events = await collect(
@@ -164,7 +171,7 @@ describe("runLoop", () => {
   // -- maxIterations: negative --
 
   it("yields error for negative maxIterations", async () => {
-    const provider = makeProvider([{ type: "text", content: "Never reached" }]);
+    const provider = makeStreamingProvider([[{ type: "text_delta", content: "Never reached" }]]);
     const registry = makeRegistry();
 
     const events = await collect(
@@ -181,7 +188,7 @@ describe("runLoop", () => {
   // -- maxIterations: 1 with text response --
 
   it("completes successfully with maxIterations: 1 when provider returns text", async () => {
-    const provider = makeProvider([{ type: "text", content: "Quick reply" }]);
+    const provider = makeStreamingProvider([[{ type: "text_delta", content: "Quick reply" }]]);
     const registry = makeRegistry();
 
     const events = await collect(
@@ -189,6 +196,7 @@ describe("runLoop", () => {
     );
 
     expect(events).toEqual([
+      { type: "text_delta", content: "Quick reply" },
       { type: "text", content: "Quick reply" },
       { type: "done" },
     ]);
@@ -198,9 +206,9 @@ describe("runLoop", () => {
 
   it("hits max iterations with maxIterations: 1 when provider returns tool call", async () => {
     const call: ToolCall = { id: "c1", name: "bash", arguments: "{}" };
-    const provider = makeProvider([
-      { type: "tool_calls", calls: [call] },
-      { type: "text", content: "Never reached" },
+    const provider = makeStreamingProvider([
+      [{ type: "tool_calls", calls: [call] }],
+      [{ type: "text_delta", content: "Never reached" }],
     ]);
     const registry = makeRegistry({ bash: "ok" });
 
@@ -220,9 +228,9 @@ describe("runLoop", () => {
 
   it("feeds tool errors back as context (not crashes)", async () => {
     const call: ToolCall = { id: "c1", name: "unknown_tool", arguments: "{}" };
-    const provider = makeProvider([
-      { type: "tool_calls", calls: [call] },
-      { type: "text", content: "I got the error" },
+    const provider = makeStreamingProvider([
+      [{ type: "tool_calls", calls: [call] }],
+      [{ type: "text_delta", content: "I got the error" }],
     ]);
     const registry = makeRegistry();
 
@@ -242,7 +250,9 @@ describe("runLoop", () => {
 
   it("yields error and done on provider error", async () => {
     const provider: Provider = {
-      chat: vi.fn().mockRejectedValue(new Error("Network failure")),
+      chat: vi.fn().mockImplementation(async function* () {
+        throw new Error("Network failure");
+      }),
     };
     const registry = makeRegistry();
 
@@ -259,8 +269,12 @@ describe("runLoop", () => {
   it("yields tool events then error when provider fails on second iteration", async () => {
     const call: ToolCall = { id: "c1", name: "bash", arguments: '{"cmd":"ls"}' };
     const chatFn = vi.fn()
-      .mockResolvedValueOnce({ type: "tool_calls", calls: [call] })
-      .mockRejectedValueOnce(new Error("Connection reset"));
+      .mockImplementationOnce(async function* () {
+        yield { type: "tool_calls", calls: [call] };
+      })
+      .mockImplementationOnce(async function* () {
+        throw new Error("Connection reset");
+      });
     const provider: Provider = { chat: chatFn };
     const registry = makeRegistry({ bash: "file.txt" });
 
@@ -278,35 +292,27 @@ describe("runLoop", () => {
 
   it("accumulates context correctly across iterations", async () => {
     const call: ToolCall = { id: "c1", name: "bash", arguments: '{"cmd":"echo hi"}' };
-    // Capture snapshots of ctx at each call since the array is mutated in place
     const snapshots: Message[][] = [];
-    const chatFn = vi.fn().mockImplementation((messages: Message[]) => {
+    const chatFn = vi.fn().mockImplementation(async function* (messages: Message[]) {
       snapshots.push([...messages]);
-      if (snapshots.length === 1) return Promise.resolve({ type: "tool_calls", calls: [call] });
-      return Promise.resolve({ type: "text", content: "Done" });
+      if (snapshots.length === 1) {
+        yield { type: "tool_calls", calls: [call] };
+      } else {
+        yield { type: "text_delta", content: "Done" };
+      }
     });
     const provider: Provider = { chat: chatFn };
     const registry = makeRegistry({ bash: "hi" });
 
     await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
 
-    // First call: just the user message
     expect(snapshots[0]).toHaveLength(1);
     expect(snapshots[0][0]).toEqual(USER_MSG);
 
-    // Second call: user + assistant (with toolCalls) + tool result
     expect(snapshots[1]).toHaveLength(3);
     expect(snapshots[1][0]).toEqual(USER_MSG);
-    expect(snapshots[1][1]).toEqual({
-      role: "assistant",
-      content: null,
-      toolCalls: [call],
-    });
-    expect(snapshots[1][2]).toEqual({
-      role: "tool",
-      content: "hi",
-      toolCallId: "c1",
-    });
+    expect(snapshots[1][1]).toEqual({ role: "assistant", content: null, toolCalls: [call] });
+    expect(snapshots[1][2]).toEqual({ role: "tool", content: "hi", toolCallId: "c1" });
   });
 
   // -- Context accumulation with multiple tool calls in one response --
@@ -315,24 +321,22 @@ describe("runLoop", () => {
     const call1: ToolCall = { id: "c1", name: "bash", arguments: '{"cmd":"pwd"}' };
     const call2: ToolCall = { id: "c2", name: "read", arguments: '{"path":"/tmp"}' };
     const snapshots: Message[][] = [];
-    const chatFn = vi.fn().mockImplementation((messages: Message[]) => {
+    const chatFn = vi.fn().mockImplementation(async function* (messages: Message[]) {
       snapshots.push([...messages]);
-      if (snapshots.length === 1) return Promise.resolve({ type: "tool_calls", calls: [call1, call2] });
-      return Promise.resolve({ type: "text", content: "Done" });
+      if (snapshots.length === 1) {
+        yield { type: "tool_calls", calls: [call1, call2] };
+      } else {
+        yield { type: "text_delta", content: "Done" };
+      }
     });
     const provider: Provider = { chat: chatFn };
     const registry = makeRegistry({ bash: "/home", read: "data" });
 
     await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
 
-    // Second call: user + assistant + tool1 result + tool2 result
     expect(snapshots[1]).toHaveLength(4);
     expect(snapshots[1][0]).toEqual(USER_MSG);
-    expect(snapshots[1][1]).toEqual({
-      role: "assistant",
-      content: null,
-      toolCalls: [call1, call2],
-    });
+    expect(snapshots[1][1]).toEqual({ role: "assistant", content: null, toolCalls: [call1, call2] });
     expect(snapshots[1][2]).toEqual({ role: "tool", content: "/home", toolCallId: "c1" });
     expect(snapshots[1][3]).toEqual({ role: "tool", content: "data", toolCallId: "c2" });
   });
@@ -340,9 +344,9 @@ describe("runLoop", () => {
   // -- Messages array immutability --
 
   it("does not mutate the caller's messages array", async () => {
-    const provider = makeProvider([
-      { type: "tool_calls", calls: [{ id: "c1", name: "bash", arguments: "{}" }] },
-      { type: "text", content: "Done" },
+    const provider = makeStreamingProvider([
+      [{ type: "tool_calls", calls: [{ id: "c1", name: "bash", arguments: "{}" }] }],
+      [{ type: "text_delta", content: "Done" }],
     ]);
     const registry = makeRegistry({ bash: "ok" });
     const originalMessages: Message[] = [USER_MSG];
@@ -369,7 +373,9 @@ describe("runLoop", () => {
   // -- System prompt --
 
   it("prepends system prompt as first message when provided", async () => {
-    const chatFn = vi.fn().mockResolvedValue({ type: "text", content: "Hi" });
+    const chatFn = vi.fn().mockImplementation(async function* () {
+      yield { type: "text_delta", content: "Hi" };
+    });
     const provider: Provider = { chat: chatFn };
     const registry = makeRegistry();
 
@@ -391,8 +397,12 @@ describe("runLoop", () => {
   it("preserves system prompt in context across tool call iterations", async () => {
     const call: ToolCall = { id: "c1", name: "bash", arguments: '{"cmd":"ls"}' };
     const chatFn = vi.fn()
-      .mockResolvedValueOnce({ type: "tool_calls", calls: [call] })
-      .mockResolvedValueOnce({ type: "text", content: "Done" });
+      .mockImplementationOnce(async function* () {
+        yield { type: "tool_calls", calls: [call] };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: "text_delta", content: "Done" };
+      });
     const provider: Provider = { chat: chatFn };
     const registry = makeRegistry({ bash: "result" });
 
@@ -405,12 +415,10 @@ describe("runLoop", () => {
       })
     );
 
-    // First call: system + user
     const firstCallMessages: Message[] = chatFn.mock.calls[0][0];
     expect(firstCallMessages[0]).toEqual({ role: "system", content: "You are a shell assistant." });
     expect(firstCallMessages[1]).toEqual(USER_MSG);
 
-    // Second call: system + user + assistant + tool
     const secondCallMessages: Message[] = chatFn.mock.calls[1][0];
     expect(secondCallMessages).toHaveLength(4);
     expect(secondCallMessages[0]).toEqual({ role: "system", content: "You are a shell assistant." });
@@ -419,20 +427,87 @@ describe("runLoop", () => {
     expect(secondCallMessages[3]).toEqual({ role: "tool", content: "result", toolCallId: "c1" });
   });
 
-  // -- makeProvider mock exhausted --
+  // -- makeStreamingProvider mock exhausted --
 
   it("throws mock exhausted when provider runs out of responses", async () => {
-    const provider = makeProvider([{ type: "text", content: "Only one" }]);
+    const provider = makeStreamingProvider([[{ type: "text_delta", content: "Only one" }]]);
     const registry = makeRegistry();
 
-    // First call succeeds
     const events1 = await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
-    expect(events1[0]).toEqual({ type: "text", content: "Only one" });
+    expect(events1.some((e) => e.type === "text_delta")).toBe(true);
 
-    // Second call: the mock is exhausted, so the provider throws
     const events2 = await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
     expect(events2).toEqual([
       { type: "error", message: "mock exhausted" },
+      { type: "done" },
+    ]);
+  });
+
+  // -- Streaming: forwards thinking events --
+
+  it("forwards thinking events from provider", async () => {
+    const provider = makeStreamingProvider([
+      [
+        { type: "thinking", content: "Let me consider..." },
+        { type: "text_delta", content: "Answer" },
+      ],
+    ]);
+    const registry = makeRegistry();
+
+    const events = await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
+
+    expect(events).toEqual([
+      { type: "thinking", content: "Let me consider..." },
+      { type: "text_delta", content: "Answer" },
+      { type: "text", content: "Answer" },
+      { type: "done" },
+    ]);
+  });
+
+  // -- Streaming: accumulates multiple text_delta events --
+
+  it("accumulates multiple text_delta chunks into final text event", async () => {
+    const provider = makeStreamingProvider([
+      [
+        { type: "text_delta", content: "Hello" },
+        { type: "text_delta", content: " world" },
+      ],
+    ]);
+    const registry = makeRegistry();
+
+    const events = await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
+
+    expect(events).toEqual([
+      { type: "text_delta", content: "Hello" },
+      { type: "text_delta", content: " world" },
+      { type: "text", content: "Hello world" },
+      { type: "done" },
+    ]);
+  });
+
+  // -- Streaming: tool cycle with streaming follow-up --
+
+  it("handles tool cycle followed by streaming text response", async () => {
+    const call: ToolCall = { id: "c1", name: "bash", arguments: '{"cmd":"ls"}' };
+    const provider = makeStreamingProvider([
+      [{ type: "tool_calls", calls: [call] }],
+      [
+        { type: "thinking", content: "Analyzing results..." },
+        { type: "text_delta", content: "Found " },
+        { type: "text_delta", content: "files" },
+      ],
+    ]);
+    const registry = makeRegistry({ bash: "a.txt b.txt" });
+
+    const events = await collect(runLoop({ provider, registry, config: BASE_CONFIG, messages: [USER_MSG] }));
+
+    expect(events).toEqual([
+      { type: "tool_call", call },
+      { type: "tool_result", callId: "c1", result: "a.txt b.txt" },
+      { type: "thinking", content: "Analyzing results..." },
+      { type: "text_delta", content: "Found " },
+      { type: "text_delta", content: "files" },
+      { type: "text", content: "Found files" },
       { type: "done" },
     ]);
   });
@@ -454,38 +529,43 @@ const ollamaAvailable = await isOllamaAvailable();
 describe.skipIf(!ollamaAvailable)("runLoop integration (real Ollama)", () => {
   it("text response works against real Ollama", async () => {
     const { OllamaProvider } = await import("@/lib/providers/ollama");
-    const provider = new OllamaProvider({ model: "qwen2.5-coder" });
     const registry = makeRegistry();
+    const provider = new OllamaProvider({ model: "qwen3:8b" });
 
     const events = await collect(
       runLoop({
         provider,
         registry,
-        config: { maxIterations: 5, model: "qwen2.5-coder" },
+        config: { maxIterations: 5, model: "qwen3:8b" },
         messages: [{ role: "user", content: "Reply with only the word: pong" }],
-      })
+      }),
     );
 
-    expect(events.some((e) => e.type === "text")).toBe(true);
+    // Streaming loop yields text_delta events; terminal text event follows
+    expect(events.some((e) => e.type === "text_delta" || e.type === "text")).toBe(true);
     expect(events[events.length - 1].type).toBe("done");
-  });
-
-  it("tool calling works against real Ollama", async () => {
-    const { OllamaProvider } = await import("@/lib/providers/ollama");
-    const { createDefaultRegistry } = await import("@/lib/tools");
-    const provider = new OllamaProvider({ model: "qwen2.5-coder" });
-    const registry = createDefaultRegistry();
-
-    const events = await collect(
-      runLoop({
-        provider,
-        registry,
-        config: { maxIterations: 5, model: "qwen2.5-coder", systemPrompt: "Use the bash tool to answer." },
-        messages: [{ role: "user", content: "Run: echo hello" }],
-      })
-    );
-
-    expect(events[events.length - 1].type).toBe("done");
-    expect(events.some((e) => e.type === "text")).toBe(true);
   }, 30000);
+
+  it(
+    "tool calling works against real Ollama",
+    async () => {
+      const { OllamaProvider } = await import("@/lib/providers/ollama");
+      const { createDefaultRegistry } = await import("@/lib/tools");
+      const provider = new OllamaProvider({ model: "qwen3:8b" });
+      const registry = createDefaultRegistry();
+
+      const events = await collect(
+        runLoop({
+          provider,
+          registry,
+          config: { maxIterations: 5, model: "qwen3:8b", systemPrompt: "Use the bash tool to answer." },
+          messages: [{ role: "user", content: "Run: echo hello" }],
+        }),
+      );
+
+      expect(events[events.length - 1].type).toBe("done");
+      expect(events.some((e) => e.type === "text_delta" || e.type === "text")).toBe(true);
+    },
+    30000,
+  );
 });

@@ -16,7 +16,6 @@ export async function* runLoop({ provider, registry, config, messages }: LoopInp
     return;
   }
 
-  // Spread to avoid mutating the caller's array
   const ctx: Message[] = config.systemPrompt
     ? [{ role: "system", content: config.systemPrompt }, ...messages]
     : [...messages];
@@ -25,42 +24,49 @@ export async function* runLoop({ provider, registry, config, messages }: LoopInp
 
   try {
     for (let iteration = 0; iteration < config.maxIterations; iteration++) {
-      let response;
+      let toolCalls: ToolCall[] | null = null;
+      let accumulatedText = "";
+
       try {
-        response = await provider.chat(ctx, tools, config.model);
+        for await (const event of provider.chat(ctx, tools, config.model)) {
+          if (event.type === "thinking" || event.type === "text_delta") {
+            yield event;
+            if (event.type === "text_delta") accumulatedText += event.content;
+          } else if (event.type === "tool_calls") {
+            toolCalls = event.calls;
+            break;
+          }
+        }
       } catch (err) {
         yield { type: "error", message: err instanceof Error ? err.message : String(err) };
         yield { type: "done" };
         return;
       }
 
-      if (response.type === "text") {
-        yield { type: "text", content: response.content };
+      if (toolCalls === null) {
+        // Stream ended with text -- yield terminal text event for compat and exit
+        if (accumulatedText) yield { type: "text", content: accumulatedText };
         yield { type: "done" };
         return;
       }
 
-      // Guard against empty tool_calls corrupting context
-      if (response.calls.length === 0) {
+      if (toolCalls.length === 0) {
         yield { type: "error", message: "Provider returned empty tool_calls" };
         yield { type: "done" };
         return;
       }
 
-      // Process tool calls batch
       const assistantMsg: Message = {
         role: "assistant",
         content: null,
-        toolCalls: response.calls,
+        toolCalls,
       };
       ctx.push(assistantMsg);
 
-      for (const call of response.calls) {
+      for (const call of toolCalls) {
         yield { type: "tool_call", call };
-
         const result = await executeToolSafe(registry, call);
         yield { type: "tool_result", callId: call.id, result };
-
         ctx.push({ role: "tool", content: result, toolCallId: call.id });
       }
     }

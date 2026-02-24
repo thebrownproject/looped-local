@@ -87,7 +87,8 @@ export async function POST(req: NextRequest) {
     yield { type: "conversation", conversationId: convId };
     const gen = runLoop({ provider, registry, config: { model, maxIterations: 20 }, messages });
     for await (const event of gen) {
-      if (event.type === "text") assistantContent += event.content;
+      // Accumulate from text_delta (streaming); text is the compat terminal event, skip to avoid double-counting
+      if (event.type === "text_delta") assistantContent += event.content;
 
       // Bug 4: persist intermediate tool_call and tool_result messages
       // Bug 7: wrap DB writes in try/catch so failures don't kill the stream
