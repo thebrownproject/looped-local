@@ -1,5 +1,5 @@
-import type { LLMResponse, Message, ToolCall, ToolDefinitionForLLM } from "@/lib/engine/types";
-import type { Provider } from "./types";
+import type { Message, ToolCall, ToolDefinitionForLLM } from "@/lib/engine/types";
+import type { Provider, ProviderEvent } from "./types";
 
 interface OllamaConfig {
   model: string;
@@ -11,14 +11,9 @@ interface OllamaToolCall {
   function: { name: string; arguments: Record<string, unknown> | string };
 }
 
-interface OllamaMessage {
-  role: string;
-  content: string;
-  tool_calls?: OllamaToolCall[] | null;
-}
-
-interface OllamaResponse {
-  message: OllamaMessage;
+interface OllamaFrame {
+  message: { role: string; content: string; tool_calls?: OllamaToolCall[] | null };
+  done: boolean;
 }
 
 function safeParseJson(raw: string): unknown {
@@ -27,6 +22,124 @@ function safeParseJson(raw: string): unknown {
   } catch {
     return {};
   }
+}
+
+// Yields NDJSON frames from a ReadableStream body.
+async function* parseNDJSON(body: ReadableStream<Uint8Array>): AsyncGenerator<OllamaFrame> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.trim()) yield JSON.parse(line) as OllamaFrame;
+    }
+  }
+
+  if (buffer.trim()) yield JSON.parse(buffer) as OllamaFrame;
+}
+
+// Think-tag state machine. Processes text char-by-char, yielding ProviderEvents.
+// Batches consecutive same-type chars into single events per invocation.
+// State persists across chunks via the returned state value.
+type ThinkState = "outside" | "maybe_open" | "inside" | "maybe_close";
+
+interface ThinkMachineState {
+  state: ThinkState;
+  buf: string; // partial tag buffer for maybe_open / maybe_close
+}
+
+function* processThinkChunk(
+  text: string,
+  machine: ThinkMachineState
+): Generator<ProviderEvent> {
+  const OPEN = "<think>";
+  const CLOSE = "</think>";
+
+  let outside = "";
+  let thinking = "";
+
+  const flush = (): ProviderEvent | null => {
+    if (outside) {
+      const ev: ProviderEvent = { type: "text_delta", content: outside };
+      outside = "";
+      return ev;
+    }
+    if (thinking) {
+      const ev: ProviderEvent = { type: "thinking", content: thinking };
+      thinking = "";
+      return ev;
+    }
+    return null;
+  };
+
+  for (const ch of text) {
+    switch (machine.state) {
+      case "outside":
+        if (ch === "<") {
+          const ev = flush();
+          if (ev) yield ev;
+          machine.state = "maybe_open";
+          machine.buf = "<";
+        } else {
+          outside += ch;
+        }
+        break;
+
+      case "maybe_open":
+        machine.buf += ch;
+        if (OPEN.startsWith(machine.buf)) {
+          if (machine.buf === OPEN) {
+            machine.state = "inside";
+            machine.buf = "";
+          }
+          // else keep accumulating
+        } else {
+          // Not a think tag -- emit buffered chars as outside text
+          outside += machine.buf;
+          machine.state = "outside";
+          machine.buf = "";
+        }
+        break;
+
+      case "inside":
+        if (ch === "<") {
+          const ev = flush();
+          if (ev) yield ev;
+          machine.state = "maybe_close";
+          machine.buf = "<";
+        } else {
+          thinking += ch;
+        }
+        break;
+
+      case "maybe_close":
+        machine.buf += ch;
+        if (CLOSE.startsWith(machine.buf)) {
+          if (machine.buf === CLOSE) {
+            const ev = flush();
+            if (ev) yield ev;
+            machine.state = "outside";
+            machine.buf = "";
+          }
+          // else keep accumulating
+        } else {
+          // Not a close tag -- emit as thinking content
+          thinking += machine.buf;
+          machine.state = "inside";
+          machine.buf = "";
+        }
+        break;
+    }
+  }
+
+  const ev = flush();
+  if (ev) yield ev;
 }
 
 export class OllamaProvider implements Provider {
@@ -38,15 +151,19 @@ export class OllamaProvider implements Provider {
     this.baseUrl = baseUrl;
   }
 
-  async chat(messages: Message[], tools: ToolDefinitionForLLM[], model: string): Promise<LLMResponse> {
-    const body = {
+  async *chat(
+    messages: Message[],
+    tools: ToolDefinitionForLLM[],
+    model: string
+  ): AsyncGenerator<ProviderEvent> {
+    const requestBody = {
       model: model ?? this.defaultModel,
       messages: this.serializeMessages(messages),
       tools: tools.map((t) => ({
         type: "function",
         function: { name: t.name, description: t.description, parameters: t.parameters },
       })),
-      stream: false,
+      stream: true,
     };
 
     let res: Response;
@@ -54,43 +171,37 @@ export class OllamaProvider implements Provider {
       res = await fetch(`${this.baseUrl}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(requestBody),
       });
     } catch (err) {
       throw err instanceof Error ? err : new Error(String(err));
     }
 
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Ollama request failed: ${res.status} - ${body}`);
+      const text = await res.text().catch(() => "");
+      throw new Error(`Ollama request failed: ${res.status} - ${text}`);
     }
 
-    let data: OllamaResponse;
-    try {
-      data = await res.json();
-    } catch {
-      throw new Error("Ollama returned invalid JSON");
+    const machine: ThinkMachineState = { state: "outside", buf: "" };
+
+    for await (const frame of parseNDJSON(res.body!)) {
+      if (frame.done && frame.message.tool_calls?.length) {
+        const calls: ToolCall[] = frame.message.tool_calls.map((tc) => {
+          const args = tc.function.arguments;
+          return {
+            id: crypto.randomUUID(),
+            name: tc.function.name,
+            arguments: typeof args === "string" ? args : JSON.stringify(args),
+          };
+        });
+        yield { type: "tool_calls", calls };
+        return;
+      }
+
+      if (!frame.done && frame.message.content) {
+        yield* processThinkChunk(frame.message.content, machine);
+      }
     }
-    return this.parseResponse(data);
-  }
-
-  private parseResponse(data: OllamaResponse): LLMResponse {
-    const { tool_calls, content } = data.message;
-
-    if (tool_calls && tool_calls.length > 0) {
-      const calls: ToolCall[] = tool_calls.map((tc) => {
-        const args = tc.function.arguments;
-        return {
-          id: crypto.randomUUID(),
-          name: tc.function.name,
-          // Ollama returns object; some models return JSON string -- normalise to string
-          arguments: typeof args === "string" ? args : JSON.stringify(args),
-        };
-      });
-      return { type: "tool_calls", calls };
-    }
-
-    return { type: "text", content: content ?? "" };
   }
 
   // Serialize engine Message[] to Ollama wire format.

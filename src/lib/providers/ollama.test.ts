@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { OllamaProvider } from "./ollama";
+import type { ProviderEvent } from "./types";
 import type { Message, ToolDefinitionForLLM } from "@/lib/engine/types";
 
 const MODEL = "qwen2.5-coder";
@@ -12,13 +13,53 @@ const tools: ToolDefinitionForLLM[] = [
   },
 ];
 
-function mockFetch(body: unknown, status = 200) {
+// Encode NDJSON lines into a ReadableStream body mock.
+// Each line is a JSON object; final frame has done:true.
+function ndjsonStream(frames: object[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const frame of frames) {
+        controller.enqueue(encoder.encode(JSON.stringify(frame) + "\n"));
+      }
+      controller.close();
+    },
+  });
+}
+
+// Mock fetch returning a streaming response with NDJSON body.
+function mockStreamFetch(frames: object[], status = 200) {
+  const body = ndjsonStream(frames);
   return vi.fn().mockResolvedValue({
     ok: status >= 200 && status < 300,
     status,
-    json: () => Promise.resolve(body),
-    text: () => Promise.resolve(JSON.stringify(body)),
+    body,
+    text: () => Promise.resolve(frames.map((f) => JSON.stringify(f)).join("\n")),
   });
+}
+
+// Error mock: no streaming body, just text().
+function mockErrorFetch(responseText: string, status: number) {
+  return vi.fn().mockResolvedValue({
+    ok: false,
+    status,
+    body: null,
+    text: () => Promise.resolve(responseText),
+  });
+}
+
+async function collect(gen: AsyncGenerator<ProviderEvent>): Promise<ProviderEvent[]> {
+  const events: ProviderEvent[] = [];
+  for await (const event of gen) events.push(event);
+  return events;
+}
+
+// Build a minimal streaming Ollama response from content deltas.
+function deltaFrames(chunks: string[]): object[] {
+  return [
+    ...chunks.map((content) => ({ message: { role: "assistant", content }, done: false })),
+    { message: { role: "assistant", content: "" }, done: true },
+  ];
 }
 
 describe("OllamaProvider", () => {
@@ -31,19 +72,19 @@ describe("OllamaProvider", () => {
 
   // -- Request shape --
 
-  it("sends correct request body (model, messages, tools, stream:false)", async () => {
-    const fetch = mockFetch({ message: { role: "assistant", content: "Hi", tool_calls: null } });
+  it("sends correct request body (model, messages, tools, stream:true)", async () => {
+    const fetch = mockStreamFetch(deltaFrames(["Hi"]));
     vi.stubGlobal("fetch", fetch);
 
     const messages: Message[] = [{ role: "user", content: "Hello" }];
-    await provider.chat(messages, tools, MODEL);
+    await collect(provider.chat(messages, tools, MODEL));
 
     const [url, init] = fetch.mock.calls[0];
     expect(url).toBe("http://localhost:11434/api/chat");
 
     const body = JSON.parse(init.body);
     expect(body.model).toBe(MODEL);
-    expect(body.stream).toBe(false);
+    expect(body.stream).toBe(true);
     expect(body.messages).toEqual([{ role: "user", content: "Hello" }]);
     expect(body.tools).toEqual([
       {
@@ -58,108 +99,168 @@ describe("OllamaProvider", () => {
   });
 
   it("uses model argument over constructor default", async () => {
-    const fetch = mockFetch({ message: { role: "assistant", content: "Hi", tool_calls: null } });
+    const fetch = mockStreamFetch(deltaFrames(["Hi"]));
     vi.stubGlobal("fetch", fetch);
 
-    await provider.chat([], [], "llama3.1");
+    await collect(provider.chat([], [], "llama3.1"));
 
     const body = JSON.parse(fetch.mock.calls[0][1].body);
     expect(body.model).toBe("llama3.1");
   });
 
-  // -- Text response parsing --
+  // -- Text streaming --
 
-  it("parses text response into { type: 'text', content }", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch({ message: { role: "assistant", content: "Hello world", tool_calls: null } })
-    );
+  it("streams text content as text_delta events", async () => {
+    vi.stubGlobal("fetch", mockStreamFetch(deltaFrames(["Hello", " world"])));
 
-    const result = await provider.chat([], [], MODEL);
-    expect(result).toEqual({ type: "text", content: "Hello world" });
+    const events = await collect(provider.chat([], [], MODEL));
+    const deltas = events.filter((e) => e.type === "text_delta");
+    expect(deltas).toEqual([
+      { type: "text_delta", content: "Hello" },
+      { type: "text_delta", content: " world" },
+    ]);
   });
 
-  it("parses text response when tool_calls is undefined", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch({ message: { role: "assistant", content: "Hello" } })
-    );
+  it("no think tags yields everything as text_delta", async () => {
+    vi.stubGlobal("fetch", mockStreamFetch(deltaFrames(["plain text response"])));
 
-    const result = await provider.chat([], [], MODEL);
-    expect(result).toEqual({ type: "text", content: "Hello" });
+    const events = await collect(provider.chat([], [], MODEL));
+    expect(events).toEqual([{ type: "text_delta", content: "plain text response" }]);
   });
 
-  // -- Tool call response parsing --
+  // -- Think-tag parsing --
 
-  it("parses tool call response into { type: 'tool_calls', calls }", async () => {
+  it("parses think tags into thinking events", async () => {
     vi.stubGlobal(
       "fetch",
-      mockFetch({
+      mockStreamFetch(deltaFrames(["<think>reasoning here</think>answer"]))
+    );
+
+    const events = await collect(provider.chat([], [], MODEL));
+    expect(events).toEqual([
+      { type: "thinking", content: "reasoning here" },
+      { type: "text_delta", content: "answer" },
+    ]);
+  });
+
+  it("content before think tags yields as text_delta", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockStreamFetch(deltaFrames(["preamble<think>thought</think>answer"]))
+    );
+
+    const events = await collect(provider.chat([], [], MODEL));
+    expect(events).toEqual([
+      { type: "text_delta", content: "preamble" },
+      { type: "thinking", content: "thought" },
+      { type: "text_delta", content: "answer" },
+    ]);
+  });
+
+  it("content after closing think tag yields as text_delta", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockStreamFetch(deltaFrames(["<think>think</think>after content"]))
+    );
+
+    const events = await collect(provider.chat([], [], MODEL));
+    const textDeltas = events.filter((e) => e.type === "text_delta");
+    expect(textDeltas).toEqual([{ type: "text_delta", content: "after content" }]);
+    expect(events.find((e) => e.type === "thinking")).toEqual({
+      type: "thinking",
+      content: "think",
+    });
+  });
+
+  it("handles think tag split across NDJSON chunks", async () => {
+    // Tag is split: "<thi" in first chunk, "nk>" in second, etc.
+    const frames = [
+      { message: { role: "assistant", content: "<thi" }, done: false },
+      { message: { role: "assistant", content: "nk>reasoning</th" }, done: false },
+      { message: { role: "assistant", content: "ink>done" }, done: false },
+      { message: { role: "assistant", content: "" }, done: true },
+    ];
+    vi.stubGlobal("fetch", mockStreamFetch(frames));
+
+    const events = await collect(provider.chat([], [], MODEL));
+    expect(events).toEqual([
+      { type: "thinking", content: "reasoning" },
+      { type: "text_delta", content: "done" },
+    ]);
+  });
+
+  // -- Tool calls --
+
+  it("tool call response yields tool_calls event", async () => {
+    const frames = [
+      {
         message: {
           role: "assistant",
           content: "",
           tool_calls: [{ function: { name: "bash", arguments: { cmd: "ls" } } }],
         },
-      })
-    );
+        done: true,
+      },
+    ];
+    vi.stubGlobal("fetch", mockStreamFetch(frames));
 
-    const result = await provider.chat([], tools, MODEL);
-    expect(result.type).toBe("tool_calls");
-    if (result.type === "tool_calls") {
-      expect(result.calls).toHaveLength(1);
-      expect(result.calls[0].name).toBe("bash");
-      expect(result.calls[0].arguments).toBe(JSON.stringify({ cmd: "ls" }));
+    const events = await collect(provider.chat([], tools, MODEL));
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("tool_calls");
+    if (events[0].type === "tool_calls") {
+      expect(events[0].calls).toHaveLength(1);
+      expect(events[0].calls[0].name).toBe("bash");
+      expect(events[0].calls[0].arguments).toBe(JSON.stringify({ cmd: "ls" }));
     }
   });
 
-  // -- Tool call ID generation --
-
   it("generates tool call IDs when Ollama doesn't provide them", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch({
+    const frames = [
+      {
         message: {
           role: "assistant",
           content: "",
           tool_calls: [{ function: { name: "bash", arguments: { cmd: "ls" } } }],
         },
-      })
-    );
+        done: true,
+      },
+    ];
+    vi.stubGlobal("fetch", mockStreamFetch(frames));
 
-    const result = await provider.chat([], tools, MODEL);
-    expect(result.type).toBe("tool_calls");
-    if (result.type === "tool_calls") {
-      expect(result.calls[0].id).toBeTruthy();
-      expect(typeof result.calls[0].id).toBe("string");
+    const events = await collect(provider.chat([], tools, MODEL));
+    expect(events[0].type).toBe("tool_calls");
+    if (events[0].type === "tool_calls") {
+      expect(typeof events[0].calls[0].id).toBe("string");
+      expect(events[0].calls[0].id).toBeTruthy();
     }
   });
 
   it("handles arguments as a JSON string (some models return string not object)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch({
+    const frames = [
+      {
         message: {
           role: "assistant",
           content: "",
           tool_calls: [{ function: { name: "bash", arguments: '{"cmd":"pwd"}' } }],
         },
-      })
-    );
+        done: true,
+      },
+    ];
+    vi.stubGlobal("fetch", mockStreamFetch(frames));
 
-    const result = await provider.chat([], tools, MODEL);
-    expect(result.type).toBe("tool_calls");
-    if (result.type === "tool_calls") {
-      expect(result.calls[0].arguments).toBe('{"cmd":"pwd"}');
+    const events = await collect(provider.chat([], tools, MODEL));
+    expect(events[0].type).toBe("tool_calls");
+    if (events[0].type === "tool_calls") {
+      expect(events[0].calls[0].arguments).toBe('{"cmd":"pwd"}');
     }
   });
 
   // -- Tool result message formatting --
 
   it("formats tool result messages with tool_name for Ollama", async () => {
-    const fetch = mockFetch({ message: { role: "assistant", content: "Done", tool_calls: null } });
+    const fetch = mockStreamFetch(deltaFrames(["Done"]));
     vi.stubGlobal("fetch", fetch);
 
-    // Prior assistant message contains the tool call so the provider can look up the name
     const messages: Message[] = [
       { role: "user", content: "Run ls" },
       {
@@ -170,7 +271,7 @@ describe("OllamaProvider", () => {
       { role: "tool", content: "file1.txt\nfile2.txt", toolCallId: "call_abc" },
     ];
 
-    await provider.chat(messages, tools, MODEL);
+    await collect(provider.chat(messages, tools, MODEL));
 
     const body = JSON.parse(fetch.mock.calls[0][1].body);
     const toolMsg = body.messages.find((m: Record<string, unknown>) => m.role === "tool");
@@ -181,11 +282,11 @@ describe("OllamaProvider", () => {
   // -- Custom base URL --
 
   it("custom base URL is used for the API call", async () => {
-    const fetch = mockFetch({ message: { role: "assistant", content: "Hi", tool_calls: null } });
+    const fetch = mockStreamFetch(deltaFrames(["Hi"]));
     vi.stubGlobal("fetch", fetch);
 
     const custom = new OllamaProvider({ model: MODEL, baseUrl: "http://192.168.1.10:11434" });
-    await custom.chat([], [], MODEL);
+    await collect(custom.chat([], [], MODEL));
 
     expect(fetch.mock.calls[0][0]).toBe("http://192.168.1.10:11434/api/chat");
   });
@@ -193,19 +294,16 @@ describe("OllamaProvider", () => {
   // -- Error handling --
 
   it("throws on non-200 responses with descriptive message", async () => {
-    vi.stubGlobal("fetch", mockFetch({ error: "model not found" }, 404));
+    vi.stubGlobal("fetch", mockErrorFetch('{"error":"model not found"}', 404));
 
-    await expect(provider.chat([], [], MODEL)).rejects.toThrow(
+    await expect(collect(provider.chat([], [], MODEL))).rejects.toThrow(
       'Ollama request failed: 404 - {"error":"model not found"}'
     );
   });
 
   it("throws on network errors with descriptive message", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockRejectedValue(new TypeError("Failed to fetch"))
-    );
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
 
-    await expect(provider.chat([], [], MODEL)).rejects.toThrow("Failed to fetch");
+    await expect(collect(provider.chat([], [], MODEL))).rejects.toThrow("Failed to fetch");
   });
 });
