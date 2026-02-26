@@ -57,10 +57,11 @@ export async function POST(req: NextRequest) {
   // Bug 8: find last user message instead of assuming last element
   const userMessage = [...messages].reverse().find((m) => m.role === "user");
 
-  // Bug 11: empty string title not caught by `??` -- use `||`
+  // Use the user's message content for the conversation title, not messages[0]
+  // which could be a non-user role or have null content
   const convId =
     conversationId ||
-    createConversation(db, messages[0].content?.slice(0, 60) || "New chat").id;
+    createConversation(db, userMessage?.content?.slice(0, 60) || "New chat").id;
 
   // Bug 6: wrap saveMessage in try/catch
   if (userMessage) {
@@ -90,8 +91,12 @@ export async function POST(req: NextRequest) {
       // Accumulate from text_delta (streaming); text is the compat terminal event, skip to avoid double-counting
       if (event.type === "text_delta") assistantContent += event.content;
 
-      // Bug 4: persist intermediate tool_call and tool_result messages
-      // Bug 7: wrap DB writes in try/catch so failures don't kill the stream
+      // Reset accumulated text when tool calls arrive -- pre-tool-call text
+      // belongs to that iteration, not the final response
+      if (event.type === "tool_call") assistantContent = "";
+
+      // Persist intermediate tool_call and tool_result messages
+      // Wrap DB writes in try/catch so failures don't kill the stream
       try {
         if (event.type === "tool_call") {
           saveMessage(db, {
