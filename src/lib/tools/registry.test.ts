@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ToolRegistry } from "./registry";
 import type { ToolDefinition } from "@/lib/tools/types";
 

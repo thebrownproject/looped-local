@@ -175,17 +175,35 @@ export function useAgentChat(initialConversationId?: string) {
     setStatus("submitted");
     statusRef.current = "submitted";
 
-    const engineMessages = history.map((m) => ({
-      role: m.role,
-      content: m.content,
-      ...(m.toolParts?.length && {
-        toolCalls: m.toolParts.map((tp) => ({
-          id: tp.toolCallId,
-          name: tp.toolName,
-          arguments: typeof tp.input === "string" ? tp.input : JSON.stringify(tp.input),
-        })),
-      }),
-    }));
+    // Reconstruct engine messages including tool result messages.
+    // Tool results are stored in assistant toolParts but the LLM needs them as
+    // separate role="tool" messages following the assistant's tool call message.
+    type EngineMsg = { role: string; content: string | null; toolCalls?: { id: string; name: string; arguments: string }[]; toolCallId?: string };
+    const engineMessages: EngineMsg[] = [];
+    for (const m of history) {
+      if (m.toolParts?.length) {
+        engineMessages.push({
+          role: m.role,
+          content: m.content || null,
+          toolCalls: m.toolParts.map((tp) => ({
+            id: tp.toolCallId,
+            name: tp.toolName,
+            arguments: typeof tp.input === "string" ? tp.input : JSON.stringify(tp.input),
+          })),
+        });
+        for (const tp of m.toolParts) {
+          if (tp.output !== undefined) {
+            engineMessages.push({
+              role: "tool",
+              content: String(tp.output ?? ""),
+              toolCallId: tp.toolCallId,
+            });
+          }
+        }
+      } else {
+        engineMessages.push({ role: m.role, content: m.content });
+      }
+    }
 
     // Bug 1: Create AbortController for this request
     const controller = new AbortController();
