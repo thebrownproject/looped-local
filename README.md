@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="assets/icon.png" alt="Looped" width="128">
-  <h1>Looped</h1>
+  <img src="assets/icon.png" alt="Bashling" width="128">
+  <h1>Bashling</h1>
 </div>
 
 <p align="center">
@@ -50,8 +50,8 @@ On the frontend, a custom `useAgentChat` hook manages the SSE connection and map
 **Requires:** Node.js 20+, [Ollama](https://ollama.com) installed and running
 
 ```bash
-git clone https://github.com/thebrownproject/looped
-cd looped
+git clone https://github.com/thebrownproject/bashling
+cd bashling
 npm install
 ```
 
@@ -112,7 +112,7 @@ src/
 
 ## Why this project
 
-Most AI chat apps wrap an API call and render the response. Looped builds the inference loop from scratch. The loop itself is the product: an async generator that orchestrates LLM calls, tool execution, error recovery, and context accumulation in a portable, testable module.
+Most AI chat apps wrap an API call and render the response. Bashling builds the inference loop from scratch. The loop itself is the product: an async generator that orchestrates LLM calls, tool execution, error recovery, and context accumulation in a portable, testable module.
 
 This demonstrates:
 

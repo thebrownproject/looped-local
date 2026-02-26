@@ -41,9 +41,9 @@ yarn-error.log*
 next-env.d.ts
 
 # sqlite database
-looped.db
-looped.db-wal
-looped.db-shm
+bashling.db
+bashling.db-wal
+bashling.db-shm
 
 # test temp files
 .test-tmp

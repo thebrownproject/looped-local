@@ -1,10 +1,10 @@
-# looped
+# bashling
 
 A local-first AI agent framework with an inference loop, built in Next.js.
 
 ## Concept
 
-Looped is a general-purpose agent that runs a local inference loop against Ollama models.
+Bashling is a general-purpose agent that runs a local inference loop against Ollama models.
 The agent pulls context, decides whether to use a tool, runs the tool, feeds the result
 back into context, and continues until it has a final response.
 

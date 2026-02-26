@@ -1,5 +1,5 @@
 /**
- * Core engine types for the Looped inference loop.
+ * Core engine types for the Bashling inference loop.
  *
  * This file is the dependency root of the type system.
  * Provider and tool types import from here, not the other way around.

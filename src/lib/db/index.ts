@@ -5,18 +5,20 @@ import * as schema from "./schema";
 export * from "./schema";
 export * from "./queries";
 
-const DB_PATH = process.env.DB_PATH ?? "looped.db";
+const DB_PATH = process.env.DB_PATH ?? "bashling.db";
 
 type DbInstance = ReturnType<typeof drizzle<typeof schema>>;
-const globalForDb = globalThis as unknown as { _loopedDb?: DbInstance };
+const globalForDb = globalThis as unknown as { _bashlingDb?: DbInstance };
 
 export function getDb() {
-  if (globalForDb._loopedDb) return globalForDb._loopedDb;
+  if (globalForDb._bashlingDb) return globalForDb._bashlingDb;
 
   const sqlite = new Database(DB_PATH);
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
 
+  globalForDb._bashlingDb = drizzle(sqlite, { schema });
+  return globalForDb._bashlingDb;
   // Auto-create tables if they don't exist (first run without migrations)
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
