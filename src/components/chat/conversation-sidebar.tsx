@@ -69,8 +69,8 @@ export function ConversationSidebar({ activeId, onSelect, onNew }: Props) {
   return (
     <Sidebar variant="inset">
       <SidebarHeader className="flex-row items-center gap-2 p-4">
-        <Image src="/icon.png" alt="Looped logo" width={24} height={24} className="shrink-0" />
-        <span className="font-semibold text-sm text-sidebar-foreground">Looped</span>
+        <Image src="/icon.png" alt="Bashling logo" width={24} height={24} className="shrink-0" />
+        <span className="font-semibold text-sm text-sidebar-foreground">Bashling</span>
         <Button
           variant="ghost"
           size="icon"

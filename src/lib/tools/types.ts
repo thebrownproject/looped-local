@@ -1,5 +1,5 @@
 /**
- * Tool definition interface for the Looped tool system.
+ * Tool definition interface for the Bashling tool system.
  *
  * Imports only from engine/types (the dependency root).
  * Each tool (bash, file read/write, etc.) implements this interface.
